@@ -26,6 +26,9 @@ import {
   type StudyRoomSession,
 } from './api'
 
+import RoomCollaborationWorkspace from './components/RoomCollaborationWorkspace'
+import CommunityView from './components/community-view'
+
 
 // =============================================================================
 // TYPES AND COURSE CONTENT
@@ -39,6 +42,7 @@ type View =
   | 'mindscan'
   | 'passport'
   | 'rooms'
+  | 'community'
 
 type QuizMode = 'lesson' | 'mindscan'
 
@@ -384,17 +388,25 @@ const modules: Module[] = [
 function readRoute(): { view: View; passportId: string } {
   const parts = window.location.pathname.split('/').filter(Boolean)
   const params = new URLSearchParams(window.location.search)
+  const requestedView = params.get('view')
 
   if (parts[0] === 'tap' && parts[1]) {
     return {
-      view: 'tap',
+      view: requestedView === 'community' ? 'community' : 'tap',
       passportId: decodeURIComponent(parts[1]),
     }
   }
 
-  if (params.has('room') || params.get('view') === 'rooms') {
+  if (params.has('room') || requestedView === 'rooms') {
     return {
       view: 'rooms',
+      passportId: 'demo-passport-01',
+    }
+  }
+
+  if (requestedView === 'community') {
+    return {
+      view: 'community',
       passportId: 'demo-passport-01',
     }
   }
@@ -625,7 +637,9 @@ export default function App() {
     const targetUrl =
       next === 'rooms'
         ? '/?view=rooms'
-        : `/tap/${encodeURIComponent(passportId)}`
+        : next === 'community'
+          ? `/tap/${encodeURIComponent(passportId)}?view=community`
+          : `/tap/${encodeURIComponent(passportId)}`
 
     window.history.pushState(
       { view: next },
@@ -848,6 +862,13 @@ export default function App() {
             onClick={() => navigate('rooms')}
           >
             <Users size={14}/> Rooms
+          </button>
+
+          <button
+            className={view === 'community' ? 'dock-link active' : 'dock-link'}
+            onClick={() => navigate('community')}
+          >
+            <Users size={14}/> Community
           </button>
 
           <button
@@ -1111,6 +1132,12 @@ export default function App() {
               learnerName={passport.display_name}
               lessons={modules.map(({ id, title }) => ({ id, title }))}
               onStartLesson={id => startModule(id, 'lesson')}
+            />
+          )}
+          {view === 'community' && (
+            <CommunityView
+              passportId={passportId}
+              passportName={passport.display_name}
             />
           )}
 
@@ -3218,6 +3245,7 @@ function RoomsView({
 
 
       {room && session ? (
+        <>
         <div className="room-live-layout">
 
           <article className="room-live-card">
@@ -3358,6 +3386,11 @@ function RoomsView({
           </article>
 
         </div>
+        <RoomCollaborationWorkspace
+          roomCode={room.room_code}
+          displayName={displayName}
+        />
+        </>
       ) : (
         <div className="rooms-actions-grid">
 
