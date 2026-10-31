@@ -1,0 +1,29 @@
+# Node
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local data and secrets (including nested backend env files)
+backend/taplearn.db
+.env
+.env.*
+!.env.example
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+backend/uploads/
+uploads/
+**/uploads/
+**/__pycache__/
+*.py[cod]

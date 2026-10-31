@@ -1,0 +1,93 @@
+
+/* TAPLEARN offline learning status */
+
+.offline-status-banner {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(1120px, calc(100% - 40px));
+  margin: 12px auto 0;
+  padding: 11px 14px;
+  border: 1px solid rgba(86, 107, 78, .18);
+  border-radius: 13px;
+  background: #f8f8ef;
+  color: #40513b;
+}
+
+.offline-status-banner.is-offline {
+  border-color: rgba(177, 133, 72, .28);
+  background: #fbf3e6;
+  color: #73552d;
+}
+
+.offline-status-banner.is-sync-pending {
+  border-color: rgba(86, 107, 78, .24);
+}
+
+.offline-status-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.offline-status-copy {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.offline-status-copy strong {
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.offline-status-copy span {
+  font-size: 10px;
+  line-height: 1.5;
+  opacity: .82;
+}
+
+.offline-sync-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(86, 107, 78, .23);
+  border-radius: 9px;
+  padding: 8px 10px;
+  background: #fffef8;
+  color: #40513b;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.offline-sync-button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.offline-sync-spinning {
+  animation: taplearn-sync-spin 1s linear infinite;
+}
+
+@keyframes taplearn-sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 600px) {
+  .offline-status-banner {
+    width: calc(100% - 24px);
+    margin-top: 8px;
+    align-items: flex-start;
+  }
+
+  .offline-sync-button {
+    padding: 7px 8px;
+  }
+}

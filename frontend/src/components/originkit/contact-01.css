@@ -1,0 +1,233 @@
+@import url("https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=Albert+Sans:wght@400;500;600&display=swap");
+
+.contact-01 {
+  background: #4a0f22;
+  color: #f7e6d8;
+  font-family: "Albert Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  position: relative;
+  isolation: isolate;
+}
+.contact-01,
+.contact-01 * {
+  box-sizing: border-box;
+}
+.contact-01 .contact {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 96px 32px 112px;
+}
+.contact-01 .top {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 32px;
+  padding-bottom: 28px;
+  border-bottom: 2px solid #ff5a3c;
+  margin-bottom: 48px;
+}
+.contact-01 h2 {
+  margin: 0;
+  font-family: "Big Shoulders Display", sans-serif;
+  font-weight: 900;
+  text-transform: uppercase;
+  color: #ff5a3c;
+  font-size: clamp(64px, 11vw, 168px);
+  line-height: 0.82;
+  letter-spacing: 0.005em;
+}
+.contact-01 .addr {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  text-align: right;
+  color: rgba(247, 230, 216, 0.8);
+}
+.contact-01 .addr b {
+  color: #f7e6d8;
+  font-weight: 600;
+}
+
+.contact-01 .body {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: 72px;
+  align-items: start;
+}
+.contact-01 .portal {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #2e0715;
+  box-shadow:
+    0 0 0 10px #4a0f22,
+    0 0 0 12px rgba(255, 90, 60, 0.6);
+}
+.contact-01 #chimes {
+  position: absolute;
+  inset: 0;
+}
+.contact-01 .cap {
+  margin: 22px 0 0;
+  text-align: center;
+  font-size: 14px;
+  color: rgba(247, 230, 216, 0.65);
+}
+
+.contact-01 .intro {
+  margin: 0 0 32px;
+  font-size: 20px;
+  line-height: 1.5;
+  max-width: 520px;
+}
+.contact-01 fieldset {
+  border: 0;
+  margin: 0 0 28px;
+  padding: 0;
+}
+.contact-01 legend {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.contact-01 .rooms {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.contact-01 .rooms label {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  border: 1.5px solid rgba(247, 230, 216, 0.25);
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.contact-01 .rooms input {
+  position: absolute;
+  opacity: 0;
+}
+.contact-01 .rooms b {
+  font-size: 16px;
+  font-weight: 600;
+}
+.contact-01 .rooms span {
+  font-size: 13px;
+  color: rgba(247, 230, 216, 0.65);
+}
+.contact-01 .rooms em {
+  font-style: normal;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ff5a3c;
+  margin-top: 6px;
+}
+.contact-01 .rooms label:hover {
+  border-color: rgba(247, 230, 216, 0.6);
+}
+.contact-01 .rooms label:has(input:checked) {
+  border-color: #ff5a3c;
+  background: rgba(255, 90, 60, 0.1);
+}
+.contact-01 .rooms label:has(input:focus-visible) {
+  outline: 2px solid #f7e6d8;
+  outline-offset: 2px;
+}
+
+.contact-01 .fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px 24px;
+}
+.contact-01 .f {
+  display: grid;
+  gap: 6px;
+}
+.contact-01 .f.full {
+  grid-column: 1 / -1;
+}
+.contact-01 .f label {
+  font-size: 14px;
+  font-weight: 600;
+}
+.contact-01 .f input,
+.contact-01 .f textarea {
+  border: 0;
+  border-bottom: 1.5px solid rgba(247, 230, 216, 0.35);
+  background: transparent;
+  color: #f7e6d8;
+  font:
+    17px "Albert Sans",
+    sans-serif;
+  padding: 8px 0 10px;
+  outline: 0;
+  border-radius: 0;
+}
+.contact-01 .f textarea {
+  resize: vertical;
+  min-height: 84px;
+}
+.contact-01 .f input::placeholder,
+.contact-01 .f textarea::placeholder {
+  color: rgba(247, 230, 216, 0.35);
+}
+.contact-01 .f input:focus,
+.contact-01 .f textarea:focus {
+  border-bottom-color: #ff5a3c;
+}
+.contact-01 .send {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-top: 32px;
+  flex-wrap: wrap;
+}
+.contact-01 button {
+  height: 56px;
+  padding: 0 30px;
+  border: 0;
+  background: #ff5a3c;
+  color: #2e0715;
+  font:
+    600 16px "Albert Sans",
+    sans-serif;
+  cursor: pointer;
+}
+.contact-01 button:hover {
+  background: #ff7a60;
+}
+.contact-01 .send span {
+  font-size: 14px;
+  color: rgba(247, 230, 216, 0.65);
+}
+
+@media (max-width: 960px) {
+  .contact-01 .body {
+    grid-template-columns: 1fr;
+    gap: 48px;
+  }
+  .contact-01 .portal {
+    max-width: 420px;
+    margin: 0 auto;
+  }
+  .contact-01 .top {
+    flex-direction: column;
+    align-items: start;
+  }
+  .contact-01 .addr {
+    text-align: left;
+  }
+}
+@media (max-width: 560px) {
+  .contact-01 .contact {
+    padding: 72px 20px 88px;
+  }
+  .contact-01 .rooms,
+  .contact-01 .fields {
+    grid-template-columns: 1fr;
+  }
+}

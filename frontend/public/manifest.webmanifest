@@ -1,0 +1,19 @@
+
+{
+  "name": "TAPLEARN - Learning Passport",
+  "short_name": "TAPLEARN",
+  "description": "Learn anywhere with adaptive lessons and your learning passport.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f2e9",
+  "theme_color": "#566b4e",
+  "icons": [
+    {
+      "src": "/taplearn-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
