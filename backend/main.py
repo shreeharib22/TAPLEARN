@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from dotenv import load_dotenv
+from db import connect_database, is_postgres_enabled
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -155,15 +156,7 @@ def database() -> Iterator[sqlite3.Connection]:
         exist_ok=True
     )
 
-    connection = sqlite3.connect(
-        DB_PATH,
-        timeout=15
-    )
-
-    connection.row_factory = sqlite3.Row
-
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 15000")
+undefined
 
     try:
         yield connection
