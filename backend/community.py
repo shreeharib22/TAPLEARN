@@ -73,8 +73,8 @@ def object_storage_client():
 
 @contextmanager
 def database() -> Iterator[sqlite3.Connection]:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-undefined
+    """Open the configured persistent database or local SQLite fallback."""
+    db = connect_database(DB_PATH, timeout=20)
     try:
         yield db
         db.commit()
@@ -83,7 +83,6 @@ undefined
         raise
     finally:
         db.close()
-
 
 def initialise_community_tables() -> None:
     with database() as db:
