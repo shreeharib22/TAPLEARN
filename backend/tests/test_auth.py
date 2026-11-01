@@ -119,6 +119,16 @@ class PostgreSQLSqlCompatibilityTests(unittest.TestCase):
         )
         self.assertIn("%s::timestamptz > CURRENT_TIMESTAMP", statement)
         self.assertEqual(params, ("2026-11-01 22:00:00",))
+    def test_study_room_expiry_and_member_activity_use_timestamp_casts(self) -> None:
+        from db import PostgresConnection
+
+        statement, _ = PostgresConnection._rewrite_sql(
+            "SELECT * FROM study_rooms "
+            "WHERE expires_at > CURRENT_TIMESTAMP "
+            "AND last_seen >= datetime('now', '-90 seconds')"
+        )
+        self.assertIn("expires_at::timestamptz > CURRENT_TIMESTAMP", statement)
+        self.assertIn("last_seen::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '90 seconds'", statement)
 
 
 if __name__ == "__main__":
