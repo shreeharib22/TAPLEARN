@@ -110,6 +110,16 @@ class PostgreSQLSqlCompatibilityTests(unittest.TestCase):
         )
         self.assertIn("BIGSERIAL PRIMARY KEY", statement)
 
+    def test_room_expiry_string_is_compared_as_timestamp(self) -> None:
+        from db import PostgresConnection
+
+        statement, params = PostgresConnection._rewrite_sql(
+            "SELECT ? > CURRENT_TIMESTAMP AS valid",
+            ("2026-11-01 22:00:00",),
+        )
+        self.assertIn("%s::timestamptz > CURRENT_TIMESTAMP", statement)
+        self.assertEqual(params, ("2026-11-01 22:00:00",))
+
 
 if __name__ == "__main__":
     unittest.main()
