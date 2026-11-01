@@ -263,14 +263,17 @@ def search_people(
             require_passport(db, current_id)
         rows = db.execute(
             """
-            SELECT p.passport_id, p.display_name, cp.role, cp.bio,
+            SELECT p.passport_id, p.display_name,
+              COALESCE(cp.role, 'student') AS role,
+              COALESCE(cp.bio, '') AS bio,
               (SELECT COUNT(*) FROM community_follows a WHERE a.followed_id=p.passport_id) AS followers,
               (SELECT COUNT(*) FROM community_follows b WHERE b.follower_id=p.passport_id) AS following,
               EXISTS(SELECT 1 FROM community_follows c
                      WHERE c.follower_id=? AND c.followed_id=p.passport_id) AS is_following
-            FROM passports p JOIN community_profiles cp ON cp.passport_id=p.passport_id
-            WHERE (p.display_name LIKE ? OR cp.bio LIKE ?)
-              AND (?='all' OR cp.role=?)
+            FROM passports p
+            LEFT JOIN community_profiles cp ON cp.passport_id=p.passport_id
+            WHERE (p.display_name LIKE ? OR COALESCE(cp.bio, '') LIKE ?)
+              AND (?='all' OR COALESCE(cp.role, 'student')=?)
               AND p.passport_id <> ?
             ORDER BY followers DESC, p.display_name COLLATE NOCASE
             LIMIT ?
