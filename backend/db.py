@@ -168,11 +168,9 @@ class PostgresConnection:
         # Room expiry and active-member fields are TEXT in the legacy schema.
         # Cast them for real timestamp comparisons because some rows use ISO-8601
         # while SQLite defaults use a space-separated timestamp.
-        statement = re.sub(
-            r"expires_at\\s*>\\s*TO_CHAR\\(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'\\)",
+        statement = statement.replace(
+            "expires_at > TO_CHAR(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')",
             "expires_at::timestamptz > CURRENT_TIMESTAMP",
-            statement,
-            flags=re.IGNORECASE,
         )
         statement = statement.replace(
             "last_seen >= TO_CHAR(CURRENT_TIMESTAMP - INTERVAL '-90 seconds', 'YYYY-MM-DD HH24:MI:SS')",
