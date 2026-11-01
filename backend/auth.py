@@ -277,18 +277,36 @@ def register(payload: RegisterPayload) -> dict[str, Any]:
 
 @router.post("/login")
 def login(payload: LoginPayload) -> dict[str, Any]:
-    email = clean_email(payload.email)
+    identifier = payload.email.strip()
+    if "@" in identifier:
+        try:
+            email_lookup = clean_email(identifier)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="Email/username or password is incorrect.") from None
+        username_lookup = ""
+    else:
+        try:
+            _, username_lookup = normalize_display_name(identifier)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="Email/username or password is incorrect.") from None
+        email_lookup = ""
+
     with database() as db:
         row = db.execute(
-            "SELECT passport_id, password_salt, password_hash FROM auth_users WHERE email=?",
-            (email,),
+            """SELECT u.passport_id, u.email, u.password_salt, u.password_hash
+               FROM auth_users u
+               LEFT JOIN auth_username_claims n ON n.passport_id = u.passport_id
+               WHERE u.email = ? OR n.username_key = ?""",
+            (email_lookup, username_lookup),
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+            raise HTTPException(status_code=401, detail="Email/username or password is incorrect.")
+
         candidate = password_digest(payload.password, row["password_salt"])
         if not hmac.compare_digest(candidate, row["password_hash"]):
-            raise HTTPException(status_code=401, detail="Email or password is incorrect.")
-        return issue_session(db, str(row["passport_id"]), email)
+            raise HTTPException(status_code=401, detail="Email/username or password is incorrect.")
+
+        return issue_session(db, str(row["passport_id"]), str(row["email"]))
 
 
 @router.get("/me")
