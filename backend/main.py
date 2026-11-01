@@ -1189,10 +1189,17 @@ def join_study_room(
 
 
 @app.get("/api/rooms/{room_code}")
-def get_study_room(room_code: str):
+def get_study_room(room_code: str, request: Request):
     code = room_code.strip().upper()
+    passport_id, _ = authenticated_passport(request)
 
     with database() as db:
+        membership = db.execute(
+            "SELECT 1 FROM study_room_members WHERE room_code = ? AND passport_id = ?",
+            (code, passport_id),
+        ).fetchone()
+        if membership is None:
+            raise HTTPException(status_code=403, detail="Join this room before viewing its details.")
         snapshot = room_snapshot(db, code)
 
     if snapshot is None:
