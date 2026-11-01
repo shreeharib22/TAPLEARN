@@ -67,5 +67,49 @@ class AuthenticationFlowTests(unittest.TestCase):
         self.assertEqual(row["bio"], "")
 
 
+
+class PostgreSQLSqlCompatibilityTests(unittest.TestCase):
+    def test_table_info_pragma_is_translated(self) -> None:
+        from db import PostgresConnection
+
+        statement, params = PostgresConnection._rewrite_sql(
+            "PRAGMA table_info(study_rooms)"
+        )
+        self.assertIn("information_schema.columns", statement)
+        self.assertEqual(params, ("study_rooms",))
+
+    def test_sqlite_insert_ignore_and_lastrowid_are_translated(self) -> None:
+        from db import PostgresConnection
+
+        statement, params = PostgresConnection._rewrite_sql(
+            "INSERT OR IGNORE INTO community_resources (title) VALUES (?)",
+            ("notes",),
+        )
+        self.assertIn("INSERT INTO community_resources", statement)
+        self.assertIn("ON CONFLICT DO NOTHING", statement)
+        self.assertIn("RETURNING id", statement)
+        self.assertIn("%s", statement)
+        self.assertEqual(params, ("notes",))
+
+    def test_sqlite_timestamp_expressions_are_translated(self) -> None:
+        from db import PostgresConnection
+
+        statement, _ = PostgresConnection._rewrite_sql(
+            "SELECT * FROM study_rooms WHERE expires_at > CURRENT_TIMESTAMP "
+            "AND last_seen >= datetime('now', '-90 seconds')"
+        )
+        self.assertIn("TO_CHAR(CURRENT_TIMESTAMP", statement)
+        self.assertIn("INTERVAL '-90 seconds'", statement)
+        self.assertNotIn("datetime(", statement)
+
+    def test_autoincrement_schema_is_translated(self) -> None:
+        from db import PostgresConnection
+
+        statement, _ = PostgresConnection._rewrite_sql(
+            "CREATE TABLE IF NOT EXISTS example (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)"
+        )
+        self.assertIn("BIGSERIAL PRIMARY KEY", statement)
+
+
 if __name__ == "__main__":
     unittest.main()
