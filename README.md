@@ -59,8 +59,8 @@ Add your own Groq key and model in `backend/.env`. See `backend/.env.example` fo
 ```dotenv
 GROQ_API_KEY=your_private_groq_key_here
 GROQ_MODEL=openai/gpt-oss-120b
-TAPLEARN_DB_PATH=/var/data/taplearn.db
-TAPLEARN_UPLOAD_DIR=/var/data/uploads
+TAPLEARN_DB_PATH=taplearn.db
+TAPLEARN_UPLOAD_DIR=uploads
 ```
 
 Get a key from <https://console.groq.com/keys>. Never put the real key in `frontend/`, React code, screenshots, source control or a public repository. `backend/.env` is ignored by Git. Keep `.env.example` as a placeholder only.
@@ -104,7 +104,7 @@ Open the exact URL printed by Vite, normally <http://localhost:5173/tap/demo-pas
 - Community profile edits, follow/unfollow actions, follower lists, following lists and resource uploads require a valid TAPLEARN login session.
 - Profile and relationship data are stored in the backend SQLite database.
 - Resource uploads accept PDF, PNG, JPG and WEBP files up to 15 MB. The backend validates the content signature rather than relying only on the file extension.
-- For a single backend instance, mount a **persistent writable volume** and set both `TAPLEARN_DB_PATH` and `TAPLEARN_UPLOAD_DIR` to paths on that volume. Do not use the default ephemeral application filesystem in production.
+- For local development, the example uses `taplearn.db` and `uploads/` relative to the backend working directory. For a single-instance production backend, mount a **persistent writable volume** and set `TAPLEARN_DB_PATH=/var/data/taplearn.db` and `TAPLEARN_UPLOAD_DIR=/var/data/uploads` (or the equivalent mounted paths on your host). Do not use the default ephemeral application filesystem in production.
 - For multi-instance deployments or managed object storage, configure an S3-compatible bucket (for example Cloudflare R2) with `S3_ENDPOINT_URL`, `S3_REGION`, `S3_BUCKET_NAME`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`. Keep the bucket private; files are streamed through the authenticated TAPLEARN backend route. Never place object-storage secrets in frontend variables.
 - The database must also live on persistent storage. S3-backed PDFs alone do not make accounts, sessions, follows or room records persistent.
 - Study-room codes expire after two hours. Each member must sign in and join with their account; workspace actions are verified against the signed-in account's membership.
