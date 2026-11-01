@@ -1216,7 +1216,7 @@ def heartbeat_study_room(
     request: Request,
 ):
     code = room_code.strip().upper()
-    passport_id, _ = authenticated_passport(request)
+    passport_id, display_name = authenticated_passport(request)
 
     with database() as db:
         updated = db.execute("""
@@ -1228,6 +1228,22 @@ def heartbeat_study_room(
             payload.member_token,
             passport_id,
         ))
+
+        # Adopt a pre-migration membership only when the caller proves
+        # possession of its random token and the signed-in profile name
+        # matches the name recorded when that room session was created.
+        if updated.rowcount == 0:
+            updated = db.execute("""
+                UPDATE study_room_members
+                SET passport_id = ?, last_seen = CURRENT_TIMESTAMP
+                WHERE room_code = ? AND member_token = ?
+                  AND passport_id IS NULL AND display_name = ?
+            """, (
+                passport_id,
+                code,
+                payload.member_token,
+                display_name,
+            ))
 
         if updated.rowcount == 0:
             raise HTTPException(
@@ -1253,17 +1269,22 @@ def leave_study_room(
     request: Request,
 ):
     code = room_code.strip().upper()
-    passport_id, _ = authenticated_passport(request)
+    passport_id, display_name = authenticated_passport(request)
 
     with database() as db:
         db.execute("""
             UPDATE study_room_members
             SET last_seen = '1970-01-01 00:00:00'
-            WHERE room_code = ? AND member_token = ? AND passport_id = ?
+            WHERE room_code = ? AND member_token = ?
+              AND (
+                passport_id = ?
+                OR (passport_id IS NULL AND display_name = ?)
+              )
         """, (
             code,
             payload.member_token,
             passport_id,
+            display_name,
         ))
 
     return {"left": True}
