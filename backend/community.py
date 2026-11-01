@@ -273,7 +273,7 @@ def search_people(
             WHERE (p.display_name LIKE ? OR COALESCE(cp.bio, '') LIKE ?)
               AND (?='all' OR COALESCE(cp.role, 'student')=?)
               AND p.passport_id <> ?
-            ORDER BY followers DESC, p.display_name COLLATE NOCASE
+            ORDER BY followers DESC, LOWER(p.display_name)
             LIMIT ?
             """,
             (current_id, search, search, role, role, current_id, limit),
