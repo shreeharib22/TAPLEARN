@@ -102,6 +102,16 @@ class PostgreSQLSqlCompatibilityTests(unittest.TestCase):
         self.assertIn("last_seen::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '90 seconds'", statement)
         self.assertNotIn("datetime(", statement)
 
+    def test_like_queries_keep_sqlite_case_insensitive_behavior(self) -> None:
+        from db import PostgresConnection
+
+        statement, params = PostgresConnection._rewrite_sql(
+            "SELECT * FROM passports WHERE display_name LIKE ?",
+            ("%shree%",),
+        )
+        self.assertIn("display_name ILIKE %s", statement)
+        self.assertEqual(params, ("%shree%",))
+
     def test_autoincrement_schema_is_translated(self) -> None:
         from db import PostgresConnection
 
