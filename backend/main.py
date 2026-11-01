@@ -149,26 +149,16 @@ class TutorRequest(BaseModel):
 
 @contextmanager
 def database() -> Iterator[sqlite3.Connection]:
-    """Open a SQLite connection and close it safely."""
-
-    DB_PATH.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-undefined
-
+    """Open the configured persistent database or local SQLite fallback."""
+    connection = connect_database(DB_PATH, timeout=15)
     try:
         yield connection
         connection.commit()
-
     except Exception:
         connection.rollback()
         raise
-
     finally:
         connection.close()
-
 
 def initialise_database() -> None:
     """Create TAPLEARN tables and the demo learner if needed."""
