@@ -214,7 +214,7 @@ class PostgresConnection:
 
         # SQLite LIKE is case-insensitive for ordinary text by default.
         # Use PostgreSQL ILIKE so profile/resource discovery keeps that behavior.
-        statement = re.sub(r"\\bLIKE\\b", "ILIKE", statement, flags=re.IGNORECASE)
+        statement = statement.replace(" LIKE ", " ILIKE ")
 
         # All current SQL uses positional SQLite placeholders.
         statement = statement.replace("?", "%s")
