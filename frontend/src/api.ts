@@ -699,6 +699,9 @@ export const createStudyRoom = (payload: {
     body: JSON.stringify(payload),
   })
 
+export const getStudyRoom = (roomCode: string) =>
+  request<StudyRoom>(`/api/rooms/${encodeURIComponent(roomCode)}`)
+
 export const joinStudyRoom = (
   roomCode: string,
   payload: { display_name: string },
