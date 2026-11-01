@@ -212,6 +212,10 @@ class PostgresConnection:
             if not re.search(r"RETURNING\s+", statement, flags=re.IGNORECASE):
                 statement = statement.rstrip().rstrip(";") + " RETURNING id"
 
+        # SQLite LIKE is case-insensitive for ordinary text by default.
+        # Use PostgreSQL ILIKE so profile/resource discovery keeps that behavior.
+        statement = re.sub(r"\\bLIKE\\b", "ILIKE", statement, flags=re.IGNORECASE)
+
         # All current SQL uses positional SQLite placeholders.
         statement = statement.replace("?", "%s")
         return statement, params
