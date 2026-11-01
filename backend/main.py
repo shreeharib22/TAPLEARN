@@ -367,6 +367,7 @@ def health() -> dict[str, str]:
         "app": "TAPLEARN API",
         "ai_provider": "Groq",
         "ai_model": GROQ_MODEL,
+        "database": "postgresql" if is_postgres_enabled() else "sqlite",
     }
 
 
