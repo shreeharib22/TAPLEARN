@@ -5,6 +5,7 @@ import {
   RefreshCw, Search, UserPlus, Users, UserCheck,
 } from 'lucide-react'
 import './community.css'
+import { getAuthToken } from '../api'
 
 type Role = 'student' | 'teacher'
 type Tab = 'discover' | 'following' | 'followers' | 'library'
@@ -39,7 +40,12 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${API_BASE}${path}`, init)
+    const headers = new Headers(init?.headers)
+    const token = getAuthToken()
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`)
+    }
+    response = await fetch(`${API_BASE}${path}`, { ...init, headers })
   } catch {
     throw new Error('Cannot reach TAPLEARN. Check your internet connection and backend URL.')
   }
@@ -80,9 +86,6 @@ export default function CommunityView({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [newName, setNewName] = useState('')
-  const [newRole, setNewRole] = useState<Role>('student')
-  const [newBio, setNewBio] = useState('')
   const [resourceTitle, setResourceTitle] = useState('')
   const [resourceDescription, setResourceDescription] = useState('')
   const [subject, setSubject] = useState('Data Structures')
@@ -157,22 +160,6 @@ export default function CommunityView({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not update follow status.')
     } finally { setBusy(false) }
-  }
-
-  async function createPassport(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setBusy(true); setError('')
-    try {
-      const result = await api<{ passport_url_path: string }>('/api/community/register', json({
-        display_name: newName,
-        role: newRole,
-        bio: newBio,
-      }))
-      window.location.assign(result.passport_url_path)
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not create passport.')
-      setBusy(false)
-    }
   }
 
   function onFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -303,15 +290,6 @@ export default function CommunityView({
         </div>
       </div>
 
-      <section className="community-new-passport">
-        <div><p className="paper-kicker">GROW THE NETWORK</p><h2>Create another learner or teacher passport</h2><p>Each person needs their own passport ID so their progress and following list remain separate.</p></div>
-        <form onSubmit={createPassport}>
-          <label>Display name<input value={newName} onChange={e => setNewName(e.target.value)} required minLength={2} maxLength={60} placeholder="Name"/></label>
-          <label>Role<select value={newRole} onChange={e => setNewRole(e.target.value as Role)}><option value="student">Student</option><option value="teacher">Teacher / educator</option></select></label>
-          <label className="community-bio-field">Short bio<input value={newBio} onChange={e => setNewBio(e.target.value)} maxLength={240} placeholder="Optional introduction"/></label>
-          <button className="community-button" disabled={busy}>Create separate passport <UserPlus size={15}/></button>
-        </form>
-      </section>
     </section>
   )
 }
