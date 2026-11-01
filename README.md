@@ -99,6 +99,13 @@ npm run dev
 
 Open the exact URL printed by Vite, normally <http://localhost:5173/tap/demo-passport-01>. If port 5173 is busy, Vite may use 5174.
 
+
+### Hosted database on Render Free
+
+Render Free web services do not have persistent local disks. To keep TAPLEARN accounts, passwords, follows, progress and study-room records between restarts, create a managed PostgreSQL database (for example, a Neon project) and set the backend environment variable `DATABASE_URL` to its PostgreSQL connection string. Keep this value private. The backend reports its active database type in `GET /api/health`.
+
+Render's own Free Postgres database currently expires 30 days after creation, so do not treat it as a permanent account database. Local SQLite remains the default when `DATABASE_URL` is not set.
+
 ## Community, uploads and study rooms
 
 - Community profile edits, follow/unfollow actions, follower lists, following lists and resource uploads require a valid TAPLEARN login session.
