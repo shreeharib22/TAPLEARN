@@ -19,6 +19,17 @@ export type Passport = {
   sync_status?: 'synced' | 'queued'
 }
 
+export type AuthSession = {
+  token: string
+  email: string
+  passport: Passport
+}
+
+export type CurrentAuthUser = {
+  email: string
+  passport: Passport
+}
+
 export type TutorRequest = {
   lesson_id: string
   lesson_title: string
@@ -50,6 +61,8 @@ export type NfcTapResponse = {
 }
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const AUTH_TOKEN_KEY = 'taplearn:auth-token:v1'
+const AUTH_USER_CACHE_KEY = 'taplearn:auth-user:v1'
 const PASSPORT_CACHE_PREFIX = 'taplearn:passport:v1:'
 const PENDING_QUEUE_KEY = 'taplearn:pending-actions:v1'
 const NFC_COUNT_PREFIX = 'taplearn:nfc-count:v1:'
@@ -78,6 +91,13 @@ type PendingAction =
       passportId: string
       createdAt: number
     }
+
+export class HttpError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message)
+    this.name = 'HttpError'
+  }
+}
 
 class NetworkUnavailableError extends Error {
   constructor(
@@ -192,32 +212,120 @@ async function request<T>(
   let response: Response
 
   try {
+    const headers = new Headers(init?.headers)
+    if (!headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json')
+    }
+    const token = getAuthToken()
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`)
+    }
+
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(init?.headers || {}),
-      },
+      headers,
     })
   } catch {
     throw new NetworkUnavailableError()
   }
 
   if (!response.ok) {
-    if (response.status >= 500) {
-      throw new Error(
-        `TAPLEARN server returned ${response.status}. Your action was not saved.`,
-      )
-    }
-
     const body = await response.json().catch(() => ({
       detail: 'Something went wrong',
     }))
-
-    throw new Error(body.detail || `Request failed (${response.status})`)
+    const message = response.status >= 500
+      ? `TAPLEARN server returned ${response.status}. Your action was not saved.`
+      : (body.detail || `Request failed (${response.status})`)
+    throw new HttpError(message, response.status)
   }
 
   return response.json() as Promise<T>
+}
+
+export function getAuthToken(): string | null {
+  try {
+    return typeof window === 'undefined'
+      ? null
+      : window.localStorage.getItem(AUTH_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function clearAuthToken(): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(AUTH_TOKEN_KEY)
+      window.localStorage.removeItem(AUTH_USER_CACHE_KEY)
+    }
+  } catch {
+    // Storage may be disabled. The app can still return to the sign-in screen.
+  }
+}
+
+function saveAuthSession(session: AuthSession): AuthSession {
+  try {
+    window.localStorage.setItem(AUTH_TOKEN_KEY, session.token)
+    window.localStorage.setItem(
+      AUTH_USER_CACHE_KEY,
+      JSON.stringify({ email: session.email, passport: session.passport }),
+    )
+  } catch {
+    throw new Error('Your browser could not save the sign-in session. Please enable site storage and try again.')
+  }
+  cachePassport(session.passport)
+  return session
+}
+
+export async function registerAccount(payload: {
+  display_name: string
+  email: string
+  password: string
+}): Promise<AuthSession> {
+  const session = await request<AuthSession>('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return saveAuthSession(session)
+}
+
+export async function loginAccount(payload: {
+  email: string
+  password: string
+}): Promise<AuthSession> {
+  const session = await request<AuthSession>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return saveAuthSession(session)
+}
+
+export function getCachedAuthUser(): CurrentAuthUser | null {
+  const cached = safeRead<CurrentAuthUser | null>(AUTH_USER_CACHE_KEY, null)
+  if (!cached?.passport?.passport_id) return null
+  return {
+    ...cached,
+    passport: readCachedPassport(cached.passport.passport_id) ?? cached.passport,
+  }
+}
+
+export async function getCurrentUser(): Promise<CurrentAuthUser> {
+  const user = await request<CurrentAuthUser>('/api/auth/me')
+  safeWrite(AUTH_USER_CACHE_KEY, user)
+  cachePassport(user.passport)
+  return user
+}
+
+export async function logoutAccount(): Promise<void> {
+  try {
+    if (getAuthToken()) {
+      await request<{ logged_out: boolean }>('/api/auth/logout', {
+        method: 'POST',
+      })
+    }
+  } finally {
+    clearAuthToken()
+  }
 }
 
 export async function getPassport(id: string): Promise<Passport> {

@@ -1,9 +1,8 @@
-
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   ArrowRight, ArrowUpRight, Award, BookOpen, BrainCircuit, Check,
   CheckCircle2, Clock3, Code, Copy, ExternalLink, Folder, GitBranch,
-  Github, Leaf, LibraryBig, Lightbulb, Link2, Nfc, Radio, RefreshCw,
+  Github, Leaf, LibraryBig, Lightbulb, Link2, LogOut, Nfc, Radio, RefreshCw,
   Search, Sparkles, Sprout, Target, TreePine, Users, WifiOff, CloudUpload, X,
 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
@@ -11,6 +10,13 @@ import { QRCodeSVG } from 'qrcode.react'
 import {
   getPassport,
   getTutorFeedback,
+  getAuthToken,
+  clearAuthToken,
+  getCurrentUser,
+  getCachedAuthUser,
+  HttpError,
+  logoutAccount,
+  type AuthSession,
   registerNfcTap,
   saveDiagnostic,
   saveLessonProgress,
@@ -28,6 +34,7 @@ import {
 
 import RoomCollaborationWorkspace from './components/RoomCollaborationWorkspace'
 import CommunityView from './components/community-view'
+import AccountGate from './components/AccountGate'
 
 
 // =============================================================================
@@ -426,8 +433,11 @@ export default function App() {
   const initial = useMemo(readRoute, [])
 
   const [view, setView] = useState<View>(initial.view)
-  const [passportId] = useState(initial.passportId)
+  const [passportId, setPassportId] = useState(initial.passportId)
   const [passport, setPassport] = useState<Passport | null>(null)
+  const [authUser, setAuthUser] = useState<{ email: string; passport: Passport } | null>(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [pendingTapEntry, setPendingTapEntry] = useState(initial.view === 'tap')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -507,42 +517,79 @@ export default function App() {
   useEffect(() => {
     let active = true
 
-    async function openLearningSpace() {
+    async function restoreLearningSpace() {
       setLoading(true)
       setError('')
 
-      try {
-        if (initial.view === 'tap') {
-          const session = await registerNfcTap(passportId)
+      const token = getAuthToken()
+      if (!token) {
+        if (active) {
+          setAuthUser(null)
+          setPassport(null)
+          setAuthReady(true)
+          setLoading(false)
+        }
+        return
+      }
 
+      try {
+        const session = await getCurrentUser()
+        if (!active) return
+
+        setAuthUser(session)
+        setPassportId(session.passport.passport_id)
+        setPassport(session.passport)
+
+        if (pendingTapEntry) {
+          try {
+            const tap = await registerNfcTap(session.passport.passport_id)
+            if (!active) return
+            setPassport(tap.passport)
+            setTapCount(tap.tap_count)
+            setPendingTapEntry(false)
+          } catch (e) {
+            if (active) {
+              setError(e instanceof Error ? e.message : 'Your account is signed in, but the NFC tap could not be recorded.')
+            }
+          }
+        }
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 401) {
+          // A rejected/expired session must return to the sign-in screen.
+          clearAuthToken()
           if (active) {
-            setPassport(session.passport)
-            setTapCount(session.tap_count)
+            setAuthUser(null)
+            setPassport(null)
           }
         } else {
-          const data = await getPassport(passportId)
-
-          if (active) setPassport(data)
-        }
-      } catch (e) {
-        if (active) {
-          setError(
-            e instanceof Error
-              ? e.message
-              : 'Could not load learner passport.',
-          )
+          // A temporary outage should not erase a valid local session.
+          const cached = getCachedAuthUser()
+          if (active && cached) {
+            setAuthUser(cached)
+            setPassportId(cached.passport.passport_id)
+            setPassport(cached.passport)
+            setNotice('Offline session restored on this device. Changes will sync when you reconnect.')
+          } else if (active) {
+            setAuthUser(null)
+            setPassport(null)
+          }
         }
       } finally {
-        if (active) setLoading(false)
+        if (active) {
+          setAuthReady(true)
+          setLoading(false)
+        }
       }
     }
 
-    void openLearningSpace()
+    void restoreLearningSpace()
 
     return () => {
       active = false
     }
-  }, [passportId])
+  // Restore once on app start. The signed-in account supplies the real passport ID.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
 
   useEffect(() => {
@@ -571,6 +618,7 @@ export default function App() {
 
     const handleOnline = async () => {
       setIsOnline(true)
+      if (!authUser || !getAuthToken()) return
 
       const pending = getPendingSyncCount()
       if (!pending) return
@@ -611,7 +659,7 @@ export default function App() {
       handleQueueChange,
     )
 
-    if (navigator.onLine && getPendingSyncCount() > 0) {
+    if (authUser && navigator.onLine && getAuthToken() && getPendingSyncCount() > 0) {
       void handleOnline()
     }
 
@@ -626,8 +674,43 @@ export default function App() {
         handleQueueChange,
       )
     }
-  }, [passportId])
+  }, [passportId, authUser])
 
+
+  async function handleAuthenticated(session: AuthSession) {
+    setAuthUser({ email: session.email, passport: session.passport })
+    setPassportId(session.passport.passport_id)
+    setPassport(session.passport)
+    setError('')
+
+    if (pendingTapEntry) {
+      setLoading(true)
+      try {
+        const tap = await registerNfcTap(session.passport.passport_id)
+        setPassport(tap.passport)
+        setTapCount(tap.tap_count)
+        setPendingTapEntry(false)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Your account is signed in, but the NFC tap could not be recorded.')
+      } finally {
+        setLoading(false)
+      }
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await logoutAccount()
+    } catch {
+      // logoutAccount clears the local token even when the server is unavailable.
+    }
+    setAuthUser(null)
+    setPassport(null)
+    setPendingTapEntry(false)
+    setView('grove')
+    setError('')
+    window.history.replaceState({}, '', '/')
+  }
 
   function navigate(next: View) {
     setView(next)
@@ -811,6 +894,19 @@ export default function App() {
   }
 
 
+  if (!authReady) {
+    return (
+      <div className="page-loading">
+        <div className="loader" />
+        <span>Restoring your TAPLEARN account…</span>
+      </div>
+    )
+  }
+
+  if (!authUser || !passport) {
+    return <AccountGate onAuthenticated={handleAuthenticated} />
+  }
+
   return (
     <div className="taplearn-app">
 
@@ -934,6 +1030,15 @@ export default function App() {
           >
             <Nfc size={16}/>
             <span>Tap passport</span>
+          </button>
+
+          <button
+            className="header-icon"
+            onClick={() => void handleLogout()}
+            aria-label="Sign out"
+            title="Sign out"
+          >
+            <LogOut size={17} />
           </button>
 
           <button
@@ -1134,6 +1239,7 @@ export default function App() {
               onStartLesson={id => startModule(id, 'lesson')}
             />
           )}
+
           {view === 'community' && (
             <CommunityView
               passportId={passportId}
@@ -2821,9 +2927,26 @@ function PassportView({
 
           <div className="passport-url">
             <span>
-              {`${window.location.origin}/tap/${passport.passport_id}`}
+              {`${window.location.origin}/tap/${encodeURIComponent(passport.passport_id)}`}
             </span>
             <button onClick={onCopy}>{copyState}</button>
+          </div>
+
+          <div className="passport-cross-device">
+            <div className="passport-cross-device-qr">
+              <QRCodeSVG
+                value={`${window.location.origin}/tap/${encodeURIComponent(passport.passport_id)}`}
+                size={156}
+                level="M"
+                includeMargin
+                bgColor="#ffffff"
+                fgColor="#20352b"
+              />
+            </div>
+            <div>
+              <strong>Open this same passport on another device</strong>
+              <p>Scan this QR on a phone, tablet or laptop. The URL opens the same learner record; the hosted backend supplies the saved progress.</p>
+            </div>
           </div>
 
           <ol>
@@ -3386,6 +3509,7 @@ function RoomsView({
           </article>
 
         </div>
+
         <RoomCollaborationWorkspace
           roomCode={room.room_code}
           displayName={displayName}

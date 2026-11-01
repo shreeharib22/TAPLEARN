@@ -92,7 +92,7 @@ app.add_middleware(
     ),
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -1223,3 +1223,18 @@ from collaboration import router as collaboration_router
 app.include_router(collaboration_router)
 from community import router as community_router
 app.include_router(community_router)
+
+# TAPLEARN account authentication
+from fastapi.responses import JSONResponse
+from auth import router as auth_router, current_user as taplearn_current_user
+app.include_router(auth_router)
+
+@app.middleware("http")
+async def require_account_for_rooms(request, call_next):
+    path = request.url.path
+    if request.method != "OPTIONS" and (path.startswith(("/api/rooms", "/api/collab", "/api/community")) and not path.endswith("/file")):
+        try:
+            taplearn_current_user(request.headers.get("authorization"))
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await call_next(request)
