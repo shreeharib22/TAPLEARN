@@ -181,6 +181,12 @@ class PostgresConnection:
             "last_seen::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '90 seconds'",
         )
 
+        # The expiry-check query compares a parameter to the current time.
+        statement = statement.replace(
+            "? > TO_CHAR(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')",
+            "?::timestamptz > CURRENT_TIMESTAMP",
+        )
+
         # Replace SQLite's INSERT OR IGNORE with PostgreSQL's conflict syntax.
         ignore_insert = bool(
             re.match(r"INSERT\s+OR\s+IGNORE\s+INTO\b", statement, flags=re.IGNORECASE)
