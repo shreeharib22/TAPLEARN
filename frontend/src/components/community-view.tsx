@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ChangeEvent } from 'react'
 import {
   BookOpen, ExternalLink, FileImage, FileText, FileUp, GraduationCap,
@@ -90,6 +90,7 @@ export default function CommunityView({
   const [resourceDescription, setResourceDescription] = useState('')
   const [subject, setSubject] = useState('Data Structures')
   const [file, setFile] = useState<File | null>(null)
+  const searchSequence = useRef(0)
 
   const loadProfile = useCallback(async () => {
     const result = await api<Profile>(`/api/community/profile/${encodeURIComponent(passportId)}`)
@@ -99,8 +100,16 @@ export default function CommunityView({
   }, [passportId])
 
   const loadPeople = useCallback(async () => {
-    const params = new URLSearchParams({ q: query, role: roleFilter, current_id: passportId })
+    const requestId = ++searchSequence.current
+    const params = new URLSearchParams({
+      q: query.trim(),
+      role: roleFilter,
+      current_id: passportId,
+    })
     const result = await api<{ people: Profile[] }>(`/api/community/search?${params.toString()}`)
+
+    // A slower earlier query must never overwrite results for newer input.
+    if (requestId !== searchSequence.current) return
     setPeople(result.people)
   }, [passportId, query, roleFilter])
 
@@ -125,7 +134,14 @@ export default function CommunityView({
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
-    if (tab === 'discover') void loadPeople().catch(e => setError(e instanceof Error ? e.message : 'Search failed.'))
+    if (tab === 'discover') {
+      // Debounce typing and ignore stale responses in loadPeople.
+      const timer = window.setTimeout(() => {
+        void loadPeople().catch(e => setError(e instanceof Error ? e.message : 'Search failed.'))
+      }, 220)
+      return () => window.clearTimeout(timer)
+    }
+
     if (tab === 'following' || tab === 'followers') {
       void loadRelationships(tab).catch(e => setError(e instanceof Error ? e.message : 'Could not load people.'))
     }
@@ -251,12 +267,12 @@ export default function CommunityView({
                 <button className="community-refresh" onClick={() => void refresh()}><RefreshCw size={14}/> Refresh</button>
               </div>
               {tab === 'discover' && <div className="community-search-row">
-                <label className="community-search"><Search size={15}/><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void loadPeople() }} placeholder="Search names or bios"/></label>
+                <label className="community-search"><Search size={15}/><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void loadPeople().catch(error => setError(error instanceof Error ? error.message : 'Search failed.')) }} placeholder="Search names or bios"/></label>
                 <select value={roleFilter} onChange={e => setRoleFilter(e.target.value as 'all' | Role)}><option value="all">Everyone</option><option value="student">Students</option><option value="teacher">Teachers</option></select>
-                <button className="community-button" onClick={() => void loadPeople()}>Search</button>
+                <button className="community-button" onClick={() => void loadPeople().catch(error => setError(error instanceof Error ? error.message : 'Search failed.'))}>Search</button>
               </div>}
               <div className="community-people">
-                {visiblePeople.length === 0 ? <div className="community-empty">{tab === 'discover' ? 'No matching profiles yet. Create another passport below.' : 'No profiles to show yet.'}</div> : visiblePeople.map(person => (
+                {visiblePeople.length === 0 ? <div className="community-empty">{tab === 'discover' ? 'No matching learners yet. Try a different name or clear your search.' : 'No profiles to show yet.'}</div> : visiblePeople.map(person => (
                   <article className="community-person" key={person.passport_id}>
                     <div className="community-person-avatar">{person.display_name.slice(0, 1).toUpperCase()}</div>
                     <div className="community-person-copy"><strong>{person.display_name}</strong><span>{person.role === 'teacher' ? <><GraduationCap size={13}/> Teacher / educator</> : <><Users size={13}/> Student</>}</span>{person.bio && <small>{person.bio}</small>}<small>{person.followers} followers</small></div>
