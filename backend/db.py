@@ -165,10 +165,22 @@ class PostgresConnection:
             flags=re.IGNORECASE,
         )
 
-        # Room expiry is passed as a timestamp string; compare it as a timestamp.
+        # Room expiry and active-member fields are TEXT in the legacy schema.
+        # Cast them for real timestamp comparisons because some rows use ISO-8601
+        # while SQLite defaults use a space-separated timestamp.
+        statement = re.sub(
+            r"expires_at\\s*>\\s*TO_CHAR\\(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'\\)",
+            "expires_at::timestamptz > CURRENT_TIMESTAMP",
+            statement,
+            flags=re.IGNORECASE,
+        )
         statement = statement.replace(
-            "? > TO_CHAR(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')",
-            "?::timestamptz > CURRENT_TIMESTAMP",
+            "last_seen >= TO_CHAR(CURRENT_TIMESTAMP - INTERVAL '-90 seconds', 'YYYY-MM-DD HH24:MI:SS')",
+            "last_seen::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '90 seconds'",
+        )
+        statement = statement.replace(
+            "last_seen >= TO_CHAR(CURRENT_TIMESTAMP + INTERVAL '-90 seconds', 'YYYY-MM-DD HH24:MI:SS')",
+            "last_seen::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '90 seconds'",
         )
 
         # Replace SQLite's INSERT OR IGNORE with PostgreSQL's conflict syntax.
