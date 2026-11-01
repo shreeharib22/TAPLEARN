@@ -6,10 +6,13 @@ import os
 import re
 import secrets
 import sqlite3
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+from db import connect_database
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -29,11 +32,8 @@ LESSONS = (
 
 @contextmanager
 def database() -> Iterator[sqlite3.Connection]:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=20)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA foreign_keys = ON")
-    db.execute("PRAGMA busy_timeout = 20000")
+    """Open the configured persistent database or local SQLite fallback."""
+    db = connect_database(DB_PATH, timeout=20)
     try:
         yield db
         db.commit()
@@ -42,6 +42,16 @@ def database() -> Iterator[sqlite3.Connection]:
         raise
     finally:
         db.close()
+
+def normalize_display_name(value: str) -> tuple[str, str]:
+    """Return a whitespace-normalized display name and its unique lookup key."""
+    name = " ".join(unicodedata.normalize("NFKC", value or "").split())
+    if not 2 <= len(name) <= 60:
+        raise HTTPException(
+            status_code=400,
+            detail="Your name must be between 2 and 60 characters.",
+        )
+    return name, name.casefold()
 
 
 def initialise_auth_tables() -> None:
@@ -76,8 +86,41 @@ def initialise_auth_tables() -> None:
                 FOREIGN KEY(passport_id) REFERENCES passports(passport_id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at);
+            CREATE TABLE IF NOT EXISTS auth_username_claims (
+                username_key TEXT PRIMARY KEY,
+                passport_id TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(passport_id) REFERENCES auth_users(passport_id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS community_profiles (
+                passport_id TEXT PRIMARY KEY,
+                role TEXT NOT NULL DEFAULT 'student'
+                    CHECK(role IN ('student', 'teacher')),
+                bio TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(passport_id) REFERENCES passports(passport_id) ON DELETE CASCADE
+            );
             """
         )
+
+        # Backfill claims for accounts created before names became unique.
+        existing_accounts = db.execute(
+            """SELECT u.passport_id, p.display_name
+               FROM auth_users u
+               JOIN passports p ON p.passport_id = u.passport_id
+               ORDER BY u.created_at, u.email"""
+        ).fetchall()
+        for account in existing_accounts:
+            _, username_key = normalize_display_name(account["display_name"])
+            db.execute(
+                """INSERT OR IGNORE INTO auth_username_claims(username_key, passport_id)
+                   VALUES (?, ?)""",
+                (username_key, account["passport_id"]),
+            )
+            db.execute(
+                """INSERT OR IGNORE INTO community_profiles(passport_id, role, bio)
+                   VALUES (?, 'student', '')""",
+                (account["passport_id"],),
+            )
 
 
 @router.on_event("startup")
@@ -92,7 +135,7 @@ class RegisterPayload(BaseModel):
 
 
 class LoginPayload(BaseModel):
-    email: str = Field(min_length=5, max_length=254)
+    email: str = Field(min_length=2, max_length=254)
     password: str = Field(min_length=1, max_length=128)
 
 
@@ -178,42 +221,105 @@ def current_user(authorization: str | None) -> tuple[str, str]:
 @router.post("/register")
 def register(payload: RegisterPayload) -> dict[str, Any]:
     email = clean_email(payload.email)
-    name = " ".join(payload.display_name.strip().split())
-    if len(name) < 2:
-        raise HTTPException(status_code=400, detail="Enter your name.")
+    name, username_key = normalize_display_name(payload.display_name)
     salt = secrets.token_hex(16)
     encoded = password_digest(payload.password, salt)
     passport_id = "tl_" + secrets.token_hex(12)
+
     with database() as db:
         if db.execute("SELECT 1 FROM auth_users WHERE email=?", (email,)).fetchone():
-            raise HTTPException(status_code=409, detail="An account with this email already exists. Sign in instead.")
-        db.execute(
-            """INSERT INTO passports
-               (passport_id, display_name, level, streak_days, lessons_total, current_lesson)
-               VALUES (?, ?, 'Curious beginner', 0, 4, 'Binary Trees')""",
-            (passport_id, name),
-        )
-        db.execute(
-            "INSERT INTO auth_users(email, passport_id, password_salt, password_hash) VALUES (?, ?, ?, ?)",
-            (email, passport_id, salt, encoded),
-        )
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists. Sign in instead.",
+            )
+
+        if db.execute(
+            "SELECT 1 FROM auth_username_claims WHERE username_key=?",
+            (username_key,),
+        ).fetchone():
+            raise HTTPException(
+                status_code=409,
+                detail="That name is already taken. Please choose another name.",
+            )
+
+        try:
+            db.execute(
+                """INSERT INTO passports
+                   (passport_id, display_name, level, streak_days, lessons_total, current_lesson)
+                   VALUES (?, ?, 'Curious beginner', 0, 4, 'Binary Trees')""",
+                (passport_id, name),
+            )
+            db.execute(
+                "INSERT INTO auth_users(email, passport_id, password_salt, password_hash) VALUES (?, ?, ?, ?)",
+                (email, passport_id, salt, encoded),
+            )
+            # The primary key prevents simultaneous signups claiming one name.
+            db.execute(
+                "INSERT INTO auth_username_claims(username_key, passport_id) VALUES (?, ?)",
+                (username_key, passport_id),
+            )
+            # New accounts are immediately discoverable in Community.
+            db.execute(
+                """INSERT OR IGNORE INTO community_profiles(passport_id, role, bio)
+                   VALUES (?, 'student', '')""",
+                (passport_id,),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="That name or email is already in use. Please sign in or choose another.",
+            ) from exc
+
         return issue_session(db, passport_id, email)
 
 
 @router.post("/login")
 def login(payload: LoginPayload) -> dict[str, Any]:
-    email = clean_email(payload.email)
+    identifier = payload.email.strip()
+    email_lookup = ""
+    username_lookup = ""
+
+    if "@" in identifier:
+        try:
+            email_lookup = clean_email(identifier)
+        except HTTPException:
+            # It may still be a display name; try the username lookup below.
+            pass
+
+    try:
+        _, username_lookup = normalize_display_name(identifier)
+    except HTTPException:
+        pass
+
+    if not email_lookup and not username_lookup:
+        raise HTTPException(status_code=401, detail="Email/username or password is incorrect.")
+
     with database() as db:
-        row = db.execute(
-            "SELECT passport_id, password_salt, password_hash FROM auth_users WHERE email=?",
-            (email,),
-        ).fetchone()
+        row = None
+        if email_lookup:
+            row = db.execute(
+                """SELECT passport_id, email, password_salt, password_hash
+                   FROM auth_users WHERE email=?""",
+                (email_lookup,),
+            ).fetchone()
+
+        if row is None and username_lookup:
+            row = db.execute(
+                """SELECT u.passport_id, u.email, u.password_salt, u.password_hash
+                   FROM auth_users u
+                   JOIN auth_username_claims n ON n.passport_id = u.passport_id
+                   WHERE n.username_key=?""",
+                (username_lookup,),
+            ).fetchone()
+
         if row is None:
-            raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+            raise HTTPException(status_code=401, detail="Email/username or password is incorrect.")
+
         candidate = password_digest(payload.password, row["password_salt"])
         if not hmac.compare_digest(candidate, row["password_hash"]):
-            raise HTTPException(status_code=401, detail="Email or password is incorrect.")
-        return issue_session(db, str(row["passport_id"]), email)
+            raise HTTPException(status_code=401, detail="Email/username or password is incorrect.")
+
+        return issue_session(db, str(row["passport_id"]), str(row["email"]))
 
 
 @router.get("/me")

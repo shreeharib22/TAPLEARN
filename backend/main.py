@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from dotenv import load_dotenv
+from db import connect_database, is_postgres_enabled
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -148,34 +149,16 @@ class TutorRequest(BaseModel):
 
 @contextmanager
 def database() -> Iterator[sqlite3.Connection]:
-    """Open a SQLite connection and close it safely."""
-
-    DB_PATH.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    connection = sqlite3.connect(
-        DB_PATH,
-        timeout=15
-    )
-
-    connection.row_factory = sqlite3.Row
-
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 15000")
-
+    """Open the configured persistent database or local SQLite fallback."""
+    connection = connect_database(DB_PATH, timeout=15)
     try:
         yield connection
         connection.commit()
-
     except Exception:
         connection.rollback()
         raise
-
     finally:
         connection.close()
-
 
 def initialise_database() -> None:
     """Create TAPLEARN tables and the demo learner if needed."""
@@ -374,6 +357,7 @@ def health() -> dict[str, str]:
         "app": "TAPLEARN API",
         "ai_provider": "Groq",
         "ai_model": GROQ_MODEL,
+        "database": "postgresql" if is_postgres_enabled() else "sqlite",
     }
 
 

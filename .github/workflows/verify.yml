@@ -24,6 +24,8 @@ jobs:
           pip install -r backend/requirements.txt
       - name: Check Python syntax
         run: python -m compileall -q backend
+      - name: Test authentication and account identity
+        run: python -m unittest discover -s backend/tests -v
 
   frontend:
     runs-on: ubuntu-latest

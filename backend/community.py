@@ -11,6 +11,8 @@ from urllib.parse import quote
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+from db import connect_database
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -71,11 +73,8 @@ def object_storage_client():
 
 @contextmanager
 def database() -> Iterator[sqlite3.Connection]:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=20)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA foreign_keys = ON")
-    db.execute("PRAGMA busy_timeout = 20000")
+    """Open the configured persistent database or local SQLite fallback."""
+    db = connect_database(DB_PATH, timeout=20)
     try:
         yield db
         db.commit()
@@ -84,7 +83,6 @@ def database() -> Iterator[sqlite3.Connection]:
         raise
     finally:
         db.close()
-
 
 def initialise_community_tables() -> None:
     with database() as db:
@@ -275,7 +273,7 @@ def search_people(
             WHERE (p.display_name LIKE ? OR COALESCE(cp.bio, '') LIKE ?)
               AND (?='all' OR COALESCE(cp.role, 'student')=?)
               AND p.passport_id <> ?
-            ORDER BY followers DESC, p.display_name COLLATE NOCASE
+            ORDER BY followers DESC, LOWER(p.display_name)
             LIMIT ?
             """,
             (current_id, search, search, role, role, current_id, limit),
