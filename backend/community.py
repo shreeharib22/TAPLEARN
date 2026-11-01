@@ -11,6 +11,8 @@ from urllib.parse import quote
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+from db import connect_database
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -72,10 +74,7 @@ def object_storage_client():
 @contextmanager
 def database() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=20)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA foreign_keys = ON")
-    db.execute("PRAGMA busy_timeout = 20000")
+undefined
     try:
         yield db
         db.commit()
