@@ -345,12 +345,14 @@ def join_room(room_code: str, payload: NameRequest, request: Request) -> dict[st
                 (code, member_name, passport_id, timestamp(), timestamp()),
             )
         else:
+            # Preserve any suffix added to distinguish two accounts with the
+            # same display name in this legacy name-keyed table.
+            member_name = str(existing["member_name"])
             db.execute(
-                "UPDATE collab_room_members SET last_seen = ?, member_name = ? "
+                "UPDATE collab_room_members SET last_seen = ? "
                 "WHERE room_code = ? AND passport_id = ?",
-                (timestamp(), name, code, passport_id),
+                (timestamp(), code, passport_id),
             )
-            member_name = name
         return {"joined": True, "room_code": code, "member_name": member_name, "expires_at": require_room(db, code)["expires_at"]}
 
 
