@@ -278,27 +278,42 @@ def register(payload: RegisterPayload) -> dict[str, Any]:
 @router.post("/login")
 def login(payload: LoginPayload) -> dict[str, Any]:
     identifier = payload.email.strip()
+    email_lookup = ""
+    username_lookup = ""
+
     if "@" in identifier:
         try:
             email_lookup = clean_email(identifier)
         except HTTPException:
-            raise HTTPException(status_code=401, detail="Email/username or password is incorrect.") from None
-        username_lookup = ""
-    else:
-        try:
-            _, username_lookup = normalize_display_name(identifier)
-        except HTTPException:
-            raise HTTPException(status_code=401, detail="Email/username or password is incorrect.") from None
-        email_lookup = ""
+            # It may still be a display name; try the username lookup below.
+            pass
+
+    try:
+        _, username_lookup = normalize_display_name(identifier)
+    except HTTPException:
+        pass
+
+    if not email_lookup and not username_lookup:
+        raise HTTPException(status_code=401, detail="Email/username or password is incorrect.")
 
     with database() as db:
-        row = db.execute(
-            """SELECT u.passport_id, u.email, u.password_salt, u.password_hash
-               FROM auth_users u
-               LEFT JOIN auth_username_claims n ON n.passport_id = u.passport_id
-               WHERE u.email = ? OR n.username_key = ?""",
-            (email_lookup, username_lookup),
-        ).fetchone()
+        row = None
+        if email_lookup:
+            row = db.execute(
+                """SELECT passport_id, email, password_salt, password_hash
+                   FROM auth_users WHERE email=?""",
+                (email_lookup,),
+            ).fetchone()
+
+        if row is None and username_lookup:
+            row = db.execute(
+                """SELECT u.passport_id, u.email, u.password_salt, u.password_hash
+                   FROM auth_users u
+                   JOIN auth_username_claims n ON n.passport_id = u.passport_id
+                   WHERE n.username_key=?""",
+                (username_lookup,),
+            ).fetchone()
+
         if row is None:
             raise HTTPException(status_code=401, detail="Email/username or password is incorrect.")
 
