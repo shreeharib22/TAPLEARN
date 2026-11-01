@@ -23,6 +23,7 @@ import {
   getPendingSyncCount,
   syncPendingChanges,
   createStudyRoom,
+  getStudyRoom,
   joinStudyRoom,
   heartbeatStudyRoom,
   leaveStudyRoom,
@@ -3105,15 +3106,7 @@ function RoomsView({
 
     const loadRoom = async () => {
       try {
-        const response = await fetch(
-          `${import.meta.env.VITE_API_BASE_URL || ''}/api/rooms/${encodeURIComponent(initialCode)}`,
-        )
-
-        if (!response.ok) {
-          throw new Error('This room is no longer active.')
-        }
-
-        await response.json()
+        await getStudyRoom(initialCode)
 
         if (active) {
           setJoinCode(initialCode)
