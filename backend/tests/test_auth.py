@@ -99,7 +99,7 @@ class PostgreSQLSqlCompatibilityTests(unittest.TestCase):
             "AND last_seen >= datetime('now', '-90 seconds')"
         )
         self.assertIn("TO_CHAR(CURRENT_TIMESTAMP", statement)
-        self.assertIn("INTERVAL '-90 seconds'", statement)
+        self.assertIn("CURRENT_TIMESTAMP - INTERVAL '90 seconds'", statement)
         self.assertNotIn("datetime(", statement)
 
     def test_autoincrement_schema_is_translated(self) -> None:
