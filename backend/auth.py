@@ -136,7 +136,7 @@ class RegisterPayload(BaseModel):
 
 
 class LoginPayload(BaseModel):
-    email: str = Field(min_length=5, max_length=254)
+    email: str = Field(min_length=2, max_length=254)
     password: str = Field(min_length=1, max_length=128)
 
 
