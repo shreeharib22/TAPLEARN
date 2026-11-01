@@ -102,7 +102,7 @@ class PostgresConnection:
 
         # SQLite's schema-inspection statements become PostgreSQL metadata queries.
         table_info = re.fullmatch(
-            r"PRAGMA\\s+table_info\\((?:['\"])?([a-zA-Z_][a-zA-Z0-9_]*)(?:['\"])?\\)",
+            r"PRAGMA\s+table_info\((?:['\"])?([a-zA-Z_][a-zA-Z0-9_]*)(?:['\"])?\)",
             statement,
             flags=re.IGNORECASE,
         )
@@ -115,12 +115,12 @@ class PostgresConnection:
                 (table_info.group(1).lower(),),
             )
 
-        if re.match(r"PRAGMA\\b", statement, flags=re.IGNORECASE):
+        if re.match(r"PRAGMA\b", statement, flags=re.IGNORECASE):
             return "SELECT 1", ()
 
         if "sqlite_master" in statement.lower():
             name_match = re.search(
-                r"name\\s*=\\s*'([^']+)'",
+                r"name\s*=\s*'([^']+)'",
                 statement,
                 flags=re.IGNORECASE,
             )
@@ -133,7 +133,7 @@ class PostgresConnection:
 
         # SQLite auto-increment primary keys map to PostgreSQL sequences.
         statement = re.sub(
-            r"INTEGER\\s+PRIMARY\\s+KEY\\s+AUTOINCREMENT",
+            r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
             "BIGSERIAL PRIMARY KEY",
             statement,
             flags=re.IGNORECASE,
@@ -142,13 +142,13 @@ class PostgresConnection:
         # Store date fields as consistently formatted text for compatibility
         # with the existing API payloads and comparison logic.
         statement = re.sub(
-            r"TEXT(\\s+NOT\\s+NULL)?\\s+DEFAULT\\s+CURRENT_TIMESTAMP",
+            r"TEXT(\s+NOT\s+NULL)?\s+DEFAULT\s+CURRENT_TIMESTAMP",
             lambda match: f"TEXT{match.group(1) or ''} DEFAULT (TO_CHAR(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'))",
             statement,
             flags=re.IGNORECASE,
         )
         statement = re.sub(
-            r"datetime\\(\\s*'now'\\s*,\\s*'([+-]\\d+)\\s+(seconds?|minutes?|hours?|days?)'\\s*\\)",
+            r"datetime\(\s*'now'\s*,\s*'([+-]\d+)\s+(seconds?|minutes?|hours?|days?)'\s*\)",
             lambda match: (
                 "TO_CHAR(CURRENT_TIMESTAMP "
                 f"+ INTERVAL '{match.group(1)} {match.group(2)}', "
@@ -159,7 +159,7 @@ class PostgresConnection:
         )
         # Existing TEXT timestamp columns compare lexically in this same format.
         statement = re.sub(
-            r"(?<!TO_CHAR\\()CURRENT_TIMESTAMP",
+            r"(?<!TO_CHAR\()CURRENT_TIMESTAMP",
             "TO_CHAR(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')",
             statement,
             flags=re.IGNORECASE,
@@ -167,27 +167,27 @@ class PostgresConnection:
 
         # Replace SQLite's INSERT OR IGNORE with PostgreSQL's conflict syntax.
         ignore_insert = bool(
-            re.match(r"INSERT\\s+OR\\s+IGNORE\\s+INTO\\b", statement, flags=re.IGNORECASE)
+            re.match(r"INSERT\s+OR\s+IGNORE\s+INTO\b", statement, flags=re.IGNORECASE)
         )
         if ignore_insert:
             statement = re.sub(
-                r"INSERT\\s+OR\\s+IGNORE\\s+INTO",
+                r"INSERT\s+OR\s+IGNORE\s+INTO",
                 "INSERT INTO",
                 statement,
                 count=1,
                 flags=re.IGNORECASE,
             )
-            if not re.search(r"ON\\s+CONFLICT", statement, flags=re.IGNORECASE):
+            if not re.search(r"ON\s+CONFLICT", statement, flags=re.IGNORECASE):
                 statement = statement.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
 
         # A few endpoints read cursor.lastrowid after inserts. Use RETURNING id.
         insert_match = re.match(
-            r"INSERT\\s+INTO\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+            r"INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)",
             statement,
             flags=re.IGNORECASE,
         )
         if insert_match and insert_match.group(1).lower() in _AUTO_ID_TABLES:
-            if not re.search(r"RETURNING\\s+", statement, flags=re.IGNORECASE):
+            if not re.search(r"RETURNING\s+", statement, flags=re.IGNORECASE):
                 statement = statement.rstrip().rstrip(";") + " RETURNING id"
 
         # All current SQL uses positional SQLite placeholders.
