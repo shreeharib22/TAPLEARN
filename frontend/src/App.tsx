@@ -3051,9 +3051,7 @@ function RoomsView({
     [],
   )
 
-  const [displayName, setDisplayName] = useState(
-    learnerName || 'Learner',
-  )
+  const displayName = learnerName || 'Learner'
 
   const [roomTitle, setRoomTitle] = useState(
     'TAPLEARN Study Room',
