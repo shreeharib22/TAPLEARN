@@ -165,6 +165,15 @@ class PostgresConnection:
             flags=re.IGNORECASE,
         )
 
+        # Room expiry is passed as a timestamp string; compare it as a timestamp,
+        # not lexically as text.
+        statement = re.sub(
+            r"\\?\\s*>\\s*TO_CHAR\\(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'\\)",
+            "?::timestamptz > CURRENT_TIMESTAMP",
+            statement,
+            flags=re.IGNORECASE,
+        )
+
         # Replace SQLite's INSERT OR IGNORE with PostgreSQL's conflict syntax.
         ignore_insert = bool(
             re.match(r"INSERT\s+OR\s+IGNORE\s+INTO\b", statement, flags=re.IGNORECASE)
