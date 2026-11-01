@@ -215,29 +215,12 @@ def person_payload(row: sqlite3.Row) -> dict[str, Any]:
 
 @router.post("/register")
 def register_passport(payload: RegisterRequest) -> dict[str, Any]:
-    name = clean_name(payload.display_name)
-    if len(name) < 2:
-        raise HTTPException(status_code=400, detail="Enter a name with at least two characters.")
-
-    passport_id = "tl_" + secrets.token_hex(12)
-    with database() as db:
-        db.execute(
-            """INSERT INTO passports
-               (passport_id, display_name, level, streak_days, lessons_total, current_lesson)
-               VALUES (?, ?, 'Curious beginner', 0, 4, 'Binary Trees')""",
-            (passport_id, name),
-        )
-        db.execute(
-            "INSERT INTO community_profiles(passport_id, role, bio) VALUES (?, ?, ?)",
-            (passport_id, payload.role, payload.bio.strip()),
-        )
-        profile = profile_payload(db, passport_id)
-
-    return {
-        "profile": profile,
-        "passport_url_path": f"/tap/{passport_id}",
-        "note": "This demo passport URL is a shareable identifier, not a secure login credential.",
-    }
+    # Accounts and passports must be created together by /api/auth/register.
+    # This legacy route is intentionally disabled to prevent unowned passports.
+    raise HTTPException(
+        status_code=410,
+        detail="Separate passports are no longer supported. Create a TAPLEARN account instead.",
+    )
 
 
 @router.get("/profile/{passport_id}")
@@ -326,7 +309,12 @@ def change_follow(
         }
 
 
-def relationship_rows(db: sqlite3.Connection, passport_id: str, direction: str) -> list[dict[str, Any]]:
+def relationship_rows(
+    db: sqlite3.Connection,
+    passport_id: str,
+    current_account_id: str,
+    direction: str,
+) -> list[dict[str, Any]]:
     if direction == "followers":
         id_column = "f.follower_id"
         where_column = "f.followed_id"
@@ -338,30 +326,39 @@ def relationship_rows(db: sqlite3.Connection, passport_id: str, direction: str) 
         SELECT p.passport_id, p.display_name, cp.role, cp.bio,
           (SELECT COUNT(*) FROM community_follows a WHERE a.followed_id=p.passport_id) AS followers,
           (SELECT COUNT(*) FROM community_follows b WHERE b.follower_id=p.passport_id) AS following,
-          CASE WHEN ? = 'following' THEN 1 ELSE 0 END AS is_following
+          EXISTS(
+            SELECT 1 FROM community_follows mine
+            WHERE mine.follower_id=? AND mine.followed_id=p.passport_id
+          ) AS is_following
         FROM community_follows f
         JOIN passports p ON p.passport_id={id_column}
         JOIN community_profiles cp ON cp.passport_id=p.passport_id
         WHERE {where_column}=?
         ORDER BY f.created_at DESC
         """,
-        (direction, passport_id),
+        (current_account_id, passport_id),
     ).fetchall()
     return [person_payload(row) for row in rows]
 
 
 @router.get("/profile/{passport_id}/followers")
-def get_followers(passport_id: str) -> dict[str, Any]:
+def get_followers(passport_id: str, request: Request) -> dict[str, Any]:
+    account_id = authenticated_passport_id(request)
+    if account_id != passport_id:
+        raise HTTPException(status_code=403, detail="You can only view your own follower list.")
     with database() as db:
         require_passport(db, passport_id)
-        return {"people": relationship_rows(db, passport_id, "followers")}
+        return {"people": relationship_rows(db, passport_id, account_id, "followers")}
 
 
 @router.get("/profile/{passport_id}/following")
-def get_following(passport_id: str) -> dict[str, Any]:
+def get_following(passport_id: str, request: Request) -> dict[str, Any]:
+    account_id = authenticated_passport_id(request)
+    if account_id != passport_id:
+        raise HTTPException(status_code=403, detail="You can only view your own following list.")
     with database() as db:
         require_passport(db, passport_id)
-        return {"people": relationship_rows(db, passport_id, "following")}
+        return {"people": relationship_rows(db, passport_id, account_id, "following")}
 
 
 def validate_file(content: bytes, suffix: str, mime_type: str) -> None:
