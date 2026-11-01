@@ -3327,15 +3327,14 @@ function RoomsView({
 
       <div className="rooms-name-field">
         <label htmlFor="room-display-name">
-          Your display name
+          Signed-in account
         </label>
 
         <input
           id="room-display-name"
           value={displayName}
-          maxLength={60}
-          onChange={event => setDisplayName(event.target.value)}
-          placeholder="Enter your name"
+          readOnly
+          aria-readonly="true"
         />
       </div>
 
