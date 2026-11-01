@@ -13,6 +13,10 @@
 - **Learning passport:** learner progress is retrieved from the backend and can be resumed from another shared device using the card URL.
 - **SQLite persistence:** lesson scores, diagnostic attempts and NFC tap events persist across local restarts.
 - **Groq-powered tutor:** the assessment result can request a misconception-focused explanation in the selected language through Groq's hosted chat-completions API. The API key stays on the backend.
+- **Account-based community:** discover learner profiles, follow and unfollow accounts, and view accurate follower/following lists.
+- **Shared learning library:** authenticated learners can upload and browse PDF/image learning resources.
+- **Study rooms:** authenticated learners can create rooms with unique invite codes, join with a code, and collaborate through shared notes, links, chat, quizzes and a whiteboard.
+- **Account-bound access:** profile edits, follows, uploads and room membership are tied to the signed-in TAPLEARN account rather than a passport ID or display name supplied by the browser.
 
 A lesson is marked complete at **67% or above**. Lower scores are saved as review results; the learner can try again without losing their best recorded score.
 
@@ -50,11 +54,13 @@ macOS/Linux:
 cp .env.example .env
 ```
 
-Add your own Groq key and model in `backend/.env`:
+Add your own Groq key and model in `backend/.env`. See `backend/.env.example` for the complete configuration template, including persistent database and resource-storage settings.
 
 ```dotenv
 GROQ_API_KEY=your_private_groq_key_here
 GROQ_MODEL=openai/gpt-oss-120b
+TAPLEARN_DB_PATH=taplearn.db
+TAPLEARN_UPLOAD_DIR=uploads
 ```
 
 Get a key from <https://console.groq.com/keys>. Never put the real key in `frontend/`, React code, screenshots, source control or a public repository. `backend/.env` is ignored by Git. Keep `.env.example` as a placeholder only.
@@ -92,6 +98,16 @@ npm run dev
 ```
 
 Open the exact URL printed by Vite, normally <http://localhost:5173/tap/demo-passport-01>. If port 5173 is busy, Vite may use 5174.
+
+## Community, uploads and study rooms
+
+- Community profile edits, follow/unfollow actions, follower lists, following lists and resource uploads require a valid TAPLEARN login session.
+- Profile and relationship data are stored in the backend SQLite database.
+- Resource uploads accept PDF, PNG, JPG and WEBP files up to 15 MB. The backend validates the content signature rather than relying only on the file extension.
+- For local development, the example uses `taplearn.db` and `uploads/` relative to the backend working directory. For a single-instance production backend, mount a **persistent writable volume** and set `TAPLEARN_DB_PATH=/var/data/taplearn.db` and `TAPLEARN_UPLOAD_DIR=/var/data/uploads` (or the equivalent mounted paths on your host). Do not use the default ephemeral application filesystem in production.
+- For multi-instance deployments or managed object storage, configure an S3-compatible bucket (for example Cloudflare R2) with `S3_ENDPOINT_URL`, `S3_REGION`, `S3_BUCKET_NAME`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`. Keep the bucket private; files are streamed through the authenticated TAPLEARN backend route. Never place object-storage secrets in frontend variables.
+- The database must also live on persistent storage. S3-backed PDFs alone do not make accounts, sessions, follows or room records persistent.
+- Study-room codes expire after two hours. Each member must sign in and join with their account; workspace actions are verified against the signed-in account's membership.
 
 ## NFC Tap-In setup
 
@@ -132,6 +148,8 @@ To change the model, update `GROQ_MODEL` in `backend/.env` to an active model ID
 ## Current limitations
 
 - This is a hackathon demo, not a production student identity or records system.
+- Community files use local persistent-volume storage unless S3-compatible storage is configured. A deployment without a persistent volume or object-storage configuration will lose uploaded files on redeploy/restart.
+- The authentication database uses SQLite and should be deployed on a persistent volume for this single-instance setup. Use a managed database before horizontally scaling the backend.
 - The seeded demo passport is not secure authentication. The NFC URL is a bearer-style identifier and can be copied.
 - NFC uses a standard NDEF URL and does not require Web NFC access in the browser.
 - MindScan uses authored diagnostic question sets; Groq personalises the post-assessment explanation but does not generate or validate the quiz questions.

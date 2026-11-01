@@ -7,14 +7,24 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Literal
+from urllib.parse import quote
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+
+from auth import current_user as taplearn_current_user
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("TAPLEARN_DB_PATH", str(BASE_DIR / "taplearn.db")))
 UPLOAD_DIR = Path(os.getenv("TAPLEARN_UPLOAD_DIR", str(BASE_DIR / "uploads")))
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "").strip()
+S3_REGION = os.getenv("S3_REGION", "auto").strip() or "auto"
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "").strip()
+S3_ACCESS_KEY_ID = os.getenv("S3_ACCESS_KEY_ID", "").strip()
+S3_SECRET_ACCESS_KEY = os.getenv("S3_SECRET_ACCESS_KEY", "").strip()
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 ALLOWED_TYPES = {
     ".pdf": "application/pdf",
@@ -25,6 +35,38 @@ ALLOWED_TYPES = {
 }
 
 router = APIRouter(prefix="/api/community", tags=["community"])
+
+
+def authenticated_passport_id(request: Request) -> str:
+    """Resolve the account identity from the verified TAPLEARN session."""
+    passport_id, _ = taplearn_current_user(request.headers.get("authorization"))
+    return passport_id
+
+
+def object_storage_client():
+    """Return an S3-compatible client when cloud storage is configured.
+
+    This supports Cloudflare R2 and other S3-compatible object stores.
+    When no bucket is configured, uploads use TAPLEARN_UPLOAD_DIR.
+    """
+    if not S3_BUCKET_NAME:
+        return None
+    if not all((S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY)):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Cloud file storage is not fully configured. Set "
+                "S3_ENDPOINT_URL, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY "
+                "for the configured S3_BUCKET_NAME."
+            ),
+        )
+    return boto3.client(
+        "s3",
+        endpoint_url=S3_ENDPOINT_URL,
+        region_name=S3_REGION,
+        aws_access_key_id=S3_ACCESS_KEY_ID,
+        aws_secret_access_key=S3_SECRET_ACCESS_KEY,
+    )
 
 
 @contextmanager
@@ -84,6 +126,7 @@ def initialise_community_tables() -> None:
                 mime_type TEXT NOT NULL,
                 size_bytes INTEGER NOT NULL,
                 licence TEXT NOT NULL DEFAULT 'CC BY 4.0',
+                storage_backend TEXT NOT NULL DEFAULT 'local',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(uploader_id) REFERENCES passports(passport_id)
                     ON DELETE CASCADE
@@ -92,6 +135,15 @@ def initialise_community_tables() -> None:
                 ON community_resources(created_at DESC);
             """
         )
+        resource_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(community_resources)").fetchall()
+        }
+        if "storage_backend" not in resource_columns:
+            db.execute(
+                "ALTER TABLE community_resources "
+                "ADD COLUMN storage_backend TEXT NOT NULL DEFAULT 'local'"
+            )
 
 
 @router.on_event("startup")
@@ -163,29 +215,12 @@ def person_payload(row: sqlite3.Row) -> dict[str, Any]:
 
 @router.post("/register")
 def register_passport(payload: RegisterRequest) -> dict[str, Any]:
-    name = clean_name(payload.display_name)
-    if len(name) < 2:
-        raise HTTPException(status_code=400, detail="Enter a name with at least two characters.")
-
-    passport_id = "tl_" + secrets.token_hex(12)
-    with database() as db:
-        db.execute(
-            """INSERT INTO passports
-               (passport_id, display_name, level, streak_days, lessons_total, current_lesson)
-               VALUES (?, ?, 'Curious beginner', 0, 4, 'Binary Trees')""",
-            (passport_id, name),
-        )
-        db.execute(
-            "INSERT INTO community_profiles(passport_id, role, bio) VALUES (?, ?, ?)",
-            (passport_id, payload.role, payload.bio.strip()),
-        )
-        profile = profile_payload(db, passport_id)
-
-    return {
-        "profile": profile,
-        "passport_url_path": f"/tap/{passport_id}",
-        "note": "This demo passport URL is a shareable identifier, not a secure login credential.",
-    }
+    # Accounts and passports must be created together by /api/auth/register.
+    # This legacy route is intentionally disabled to prevent unowned passports.
+    raise HTTPException(
+        status_code=410,
+        detail="Separate passports are no longer supported. Create a TAPLEARN account instead.",
+    )
 
 
 @router.get("/profile/{passport_id}")
@@ -196,7 +231,13 @@ def get_profile(passport_id: str) -> dict[str, Any]:
 
 
 @router.post("/profile/{passport_id}/update")
-def update_profile(passport_id: str, payload: ProfileUpdate) -> dict[str, Any]:
+def update_profile(
+    passport_id: str,
+    payload: ProfileUpdate,
+    request: Request,
+) -> dict[str, Any]:
+    if authenticated_passport_id(request) != passport_id:
+        raise HTTPException(status_code=403, detail="You can only update your own profile.")
     with database() as db:
         require_passport(db, passport_id)
         db.execute(
@@ -208,11 +249,14 @@ def update_profile(passport_id: str, payload: ProfileUpdate) -> dict[str, Any]:
 
 @router.get("/search")
 def search_people(
+    request: Request,
     q: str = "",
     role: Literal["all", "student", "teacher"] = "all",
     current_id: str = "",
     limit: int = Query(default=40, ge=1, le=80),
 ) -> dict[str, Any]:
+    # Never trust a client-supplied current_id for relationship state.
+    current_id = authenticated_passport_id(request)
     search = f"%{q.strip()[:80]}%"
     with database() as db:
         if current_id:
@@ -237,7 +281,13 @@ def search_people(
 
 
 @router.post("/profile/{passport_id}/follow")
-def change_follow(passport_id: str, payload: FollowRequest) -> dict[str, Any]:
+def change_follow(
+    passport_id: str,
+    payload: FollowRequest,
+    request: Request,
+) -> dict[str, Any]:
+    if authenticated_passport_id(request) != passport_id:
+        raise HTTPException(status_code=403, detail="You can only change follows for your own account.")
     with database() as db:
         require_passport(db, passport_id)
         require_passport(db, payload.target_id)
@@ -259,7 +309,12 @@ def change_follow(passport_id: str, payload: FollowRequest) -> dict[str, Any]:
         }
 
 
-def relationship_rows(db: sqlite3.Connection, passport_id: str, direction: str) -> list[dict[str, Any]]:
+def relationship_rows(
+    db: sqlite3.Connection,
+    passport_id: str,
+    current_account_id: str,
+    direction: str,
+) -> list[dict[str, Any]]:
     if direction == "followers":
         id_column = "f.follower_id"
         where_column = "f.followed_id"
@@ -271,30 +326,39 @@ def relationship_rows(db: sqlite3.Connection, passport_id: str, direction: str) 
         SELECT p.passport_id, p.display_name, cp.role, cp.bio,
           (SELECT COUNT(*) FROM community_follows a WHERE a.followed_id=p.passport_id) AS followers,
           (SELECT COUNT(*) FROM community_follows b WHERE b.follower_id=p.passport_id) AS following,
-          CASE WHEN ? = 'following' THEN 1 ELSE 0 END AS is_following
+          EXISTS(
+            SELECT 1 FROM community_follows mine
+            WHERE mine.follower_id=? AND mine.followed_id=p.passport_id
+          ) AS is_following
         FROM community_follows f
         JOIN passports p ON p.passport_id={id_column}
         JOIN community_profiles cp ON cp.passport_id=p.passport_id
         WHERE {where_column}=?
         ORDER BY f.created_at DESC
         """,
-        (direction, passport_id),
+        (current_account_id, passport_id),
     ).fetchall()
     return [person_payload(row) for row in rows]
 
 
 @router.get("/profile/{passport_id}/followers")
-def get_followers(passport_id: str) -> dict[str, Any]:
+def get_followers(passport_id: str, request: Request) -> dict[str, Any]:
+    account_id = authenticated_passport_id(request)
+    if account_id != passport_id:
+        raise HTTPException(status_code=403, detail="You can only view your own follower list.")
     with database() as db:
         require_passport(db, passport_id)
-        return {"people": relationship_rows(db, passport_id, "followers")}
+        return {"people": relationship_rows(db, passport_id, account_id, "followers")}
 
 
 @router.get("/profile/{passport_id}/following")
-def get_following(passport_id: str) -> dict[str, Any]:
+def get_following(passport_id: str, request: Request) -> dict[str, Any]:
+    account_id = authenticated_passport_id(request)
+    if account_id != passport_id:
+        raise HTTPException(status_code=403, detail="You can only view your own following list.")
     with database() as db:
         require_passport(db, passport_id)
-        return {"people": relationship_rows(db, passport_id, "following")}
+        return {"people": relationship_rows(db, passport_id, account_id, "following")}
 
 
 def validate_file(content: bytes, suffix: str, mime_type: str) -> None:
@@ -324,6 +388,9 @@ async def upload_resource(
     licence: str = Query(default="CC BY 4.0", max_length=60),
     filename: str = Query(default="resource", max_length=180),
 ) -> dict[str, Any]:
+    account_id = authenticated_passport_id(request)
+    if account_id != passport_id:
+        raise HTTPException(status_code=403, detail="Upload resources using your signed-in account.")
     suffix = Path(filename).suffix.lower()
     mime_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     content = await request.body()
@@ -334,23 +401,49 @@ async def upload_resource(
     validate_file(content, suffix, mime_type)
     safe_original_name = Path(filename).name[:180]
     stored_name = f"{uuid.uuid4().hex}{suffix}"
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    client = object_storage_client()
+    storage_backend = "s3" if client is not None else "local"
     destination = UPLOAD_DIR / stored_name
-    destination.write_bytes(content)
 
     try:
+        if client is not None:
+            client.put_object(
+                Bucket=S3_BUCKET_NAME,
+                Key=stored_name,
+                Body=content,
+                ContentType=mime_type,
+                ContentDisposition="inline",
+            )
+        else:
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+
         with database() as db:
-            require_passport(db, passport_id)
+            require_passport(db, account_id)
             cursor = db.execute(
                 """INSERT INTO community_resources
-                   (uploader_id,title,description,subject,original_name,stored_name,mime_type,size_bytes,licence)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (passport_id, title.strip(), description.strip(), subject.strip() or "General",
-                 safe_original_name, stored_name, mime_type, len(content), licence.strip() or "CC BY 4.0"),
+                   (uploader_id,title,description,subject,original_name,stored_name,mime_type,size_bytes,licence,storage_backend)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (account_id, title.strip(), description.strip(), subject.strip() or "General",
+                 safe_original_name, stored_name, mime_type, len(content),
+                 licence.strip() or "CC BY 4.0", storage_backend),
             )
             resource_id = int(cursor.lastrowid)
+    except (BotoCoreError, ClientError) as exc:
+        if client is None:
+            destination.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Cloud storage could not save this file. Please try again.",
+        ) from exc
     except Exception:
-        destination.unlink(missing_ok=True)
+        if client is not None:
+            try:
+                client.delete_object(Bucket=S3_BUCKET_NAME, Key=stored_name)
+            except (BotoCoreError, ClientError):
+                pass
+        else:
+            destination.unlink(missing_ok=True)
         raise
     return {"id": resource_id, "title": title.strip(), "file_url": f"/api/community/resources/{resource_id}/file"}
 
@@ -397,15 +490,50 @@ def list_resources(
 
 
 @router.get("/resources/{resource_id}/file")
-def get_resource_file(resource_id: int) -> FileResponse:
+def get_resource_file(resource_id: int):
     with database() as db:
         row = db.execute(
-            "SELECT original_name, stored_name, mime_type FROM community_resources WHERE id=?",
+            "SELECT original_name, stored_name, mime_type, storage_backend "
+            "FROM community_resources WHERE id=?",
             (resource_id,),
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Resource not found.")
+
+    filename = Path(row["original_name"]).name
+    disposition = (
+        f'inline; filename="{filename.replace(chr(34), "")}"; '
+        f"filename*=UTF-8''{quote(filename)}"
+    )
+
+    if row["storage_backend"] == "s3":
+        client = object_storage_client()
+        if client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Cloud storage is not configured on this server.",
+            )
+        try:
+            stored = client.get_object(Bucket=S3_BUCKET_NAME, Key=row["stored_name"])
+        except (BotoCoreError, ClientError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="The cloud resource could not be retrieved.",
+            ) from exc
+        return StreamingResponse(
+            stored["Body"].iter_chunks(chunk_size=64 * 1024),
+            media_type=row["mime_type"],
+            headers={"Content-Disposition": disposition},
+        )
+
     path = UPLOAD_DIR / row["stored_name"]
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="The resource file is not on this server.")
-    return FileResponse(path, media_type=row["mime_type"], filename=row["original_name"])
+        raise HTTPException(
+            status_code=404,
+            detail="The resource file is not available on this server.",
+        )
+    return FileResponse(
+        path,
+        media_type=row["mime_type"],
+        headers={"Content-Disposition": disposition},
+    )

@@ -12,7 +12,8 @@ from typing import Any, Iterator
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from auth import current_user as taplearn_current_user
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -56,12 +57,14 @@ def initialise_collaboration_tables() -> None:
             CREATE TABLE IF NOT EXISTS collab_rooms (
                 room_code TEXT PRIMARY KEY,
                 host_name TEXT NOT NULL,
+                host_passport_id TEXT,
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS collab_room_members (
                 room_code TEXT NOT NULL,
                 member_name TEXT NOT NULL,
+                passport_id TEXT,
                 joined_at TEXT NOT NULL,
                 last_seen TEXT NOT NULL,
                 PRIMARY KEY (room_code, member_name)
@@ -126,6 +129,20 @@ def initialise_collaboration_tables() -> None:
             CREATE INDEX IF NOT EXISTS idx_collab_strokes_room ON collab_whiteboard_strokes(room_code, id);
             """
         )
+        room_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(collab_rooms)").fetchall()
+        }
+        if "host_passport_id" not in room_columns:
+            db.execute("ALTER TABLE collab_rooms ADD COLUMN host_passport_id TEXT")
+        member_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(collab_room_members)").fetchall()
+        }
+        if "passport_id" not in member_columns:
+            db.execute("ALTER TABLE collab_room_members ADD COLUMN passport_id TEXT")
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_collab_room_member_account "
+            "ON collab_room_members(room_code, passport_id) WHERE passport_id IS NOT NULL"
+        )
 
 
 initialise_collaboration_tables()
@@ -163,11 +180,17 @@ def mirror_legacy_room(db: sqlite3.Connection, code: str) -> sqlite3.Row | None:
 
     host = next((str(legacy[name]).strip() for name in ("host_name", "owner_name", "created_by_name", "host", "created_by")
                  if name in columns and legacy[name] and str(legacy[name]).strip()), "Room host")
+    host_passport_id = (
+        str(legacy["host_passport_id"])
+        if "host_passport_id" in columns and legacy["host_passport_id"]
+        else None
+    )
     created = str(legacy["created_at"]) if "created_at" in columns and legacy["created_at"] else timestamp()
     expires = str(legacy["expires_at"]) if "expires_at" in columns and legacy["expires_at"] else (utc_now() + timedelta(minutes=ROOM_MINUTES)).isoformat(timespec="seconds")
     db.execute(
-        "INSERT OR IGNORE INTO collab_rooms (room_code, host_name, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        (code, host, created, expires),
+        "INSERT OR IGNORE INTO collab_rooms "
+        "(room_code, host_name, host_passport_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        (code, host, host_passport_id, created, expires),
     )
     return db.execute("SELECT * FROM collab_rooms WHERE room_code = ?", (code,)).fetchone()
 
@@ -188,21 +211,20 @@ def require_room(db: sqlite3.Connection, room_code: str) -> sqlite3.Row:
     return room
 
 
-def require_member(db: sqlite3.Connection, room_code: str, name: str) -> str:
-    member = clean_name(name)
-    if not member:
-        raise HTTPException(status_code=400, detail="Enter a display name first.")
+def require_member(db: sqlite3.Connection, room_code: str, request: Request) -> str:
+    """Verify room membership by the signed-in account, never by a display name."""
+    passport_id, _ = taplearn_current_user(request.headers.get("authorization"))
     row = db.execute(
-        "SELECT 1 FROM collab_room_members WHERE room_code = ? AND member_name = ?",
-        (room_code, member),
+        "SELECT member_name FROM collab_room_members WHERE room_code = ? AND passport_id = ?",
+        (room_code, passport_id),
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=403, detail="Join this room before using its workspace.")
     db.execute(
-        "UPDATE collab_room_members SET last_seen = ? WHERE room_code = ? AND member_name = ?",
-        (timestamp(), room_code, member),
+        "UPDATE collab_room_members SET last_seen = ? WHERE room_code = ? AND passport_id = ?",
+        (timestamp(), room_code, passport_id),
     )
-    return member
+    return str(row["member_name"])
 
 
 class NameRequest(BaseModel):
@@ -251,10 +273,15 @@ class StrokeRequest(NameRequest):
 
 
 @router.post("/rooms")
-def create_room(payload: NameRequest) -> dict[str, Any]:
-    host = clean_name(payload.member_name)
-    if not host:
-        raise HTTPException(status_code=400, detail="Enter your name before creating a room.")
+def create_room(payload: NameRequest, request: Request) -> dict[str, Any]:
+    host_passport_id, _ = taplearn_current_user(request.headers.get("authorization"))
+    with connection() as profile_db:
+        profile = profile_db.execute(
+            "SELECT display_name FROM passports WHERE passport_id = ?", (host_passport_id,)
+        ).fetchone()
+    if profile is None:
+        raise HTTPException(status_code=401, detail="Signed-in learner profile not found.")
+    host = clean_name(str(profile["display_name"]))
     expires = utc_now() + timedelta(minutes=ROOM_MINUTES)
     with connection() as db:
         for _ in range(20):
@@ -265,22 +292,29 @@ def create_room(payload: NameRequest) -> dict[str, Any]:
         else:
             raise HTTPException(status_code=503, detail="Could not generate a room code. Please try again.")
         db.execute(
-            "INSERT INTO collab_rooms (room_code, host_name, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (code, host, timestamp(), expires.isoformat(timespec="seconds")),
+            "INSERT INTO collab_rooms "
+            "(room_code, host_name, host_passport_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            (code, host, host_passport_id, timestamp(), expires.isoformat(timespec="seconds")),
         )
         db.execute(
-            "INSERT INTO collab_room_members (room_code, member_name, joined_at, last_seen) VALUES (?, ?, ?, ?)",
-            (code, host, timestamp(), timestamp()),
+            "INSERT INTO collab_room_members "
+            "(room_code, member_name, passport_id, joined_at, last_seen) VALUES (?, ?, ?, ?, ?)",
+            (code, host, host_passport_id, timestamp(), timestamp()),
         )
     return {"room_code": code, "host_name": host, "expires_at": expires.isoformat(timespec="seconds"), "member_name": host}
 
 
 @router.post("/rooms/{room_code}/join")
-def join_room(room_code: str, payload: NameRequest) -> dict[str, Any]:
+def join_room(room_code: str, payload: NameRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
-    name = clean_name(payload.member_name)
-    if not name:
-        raise HTTPException(status_code=400, detail="Enter your name before joining.")
+    passport_id, _ = taplearn_current_user(request.headers.get("authorization"))
+    with connection() as profile_db:
+        profile = profile_db.execute(
+            "SELECT display_name FROM passports WHERE passport_id = ?", (passport_id,)
+        ).fetchone()
+    if profile is None:
+        raise HTTPException(status_code=401, detail="Signed-in learner profile not found.")
+    name = clean_name(str(profile["display_name"]))
     with connection() as db:
         require_room(db, code)
         active_since = (utc_now() - timedelta(seconds=ACTIVE_SECONDS)).isoformat(timespec="seconds")
@@ -288,27 +322,46 @@ def join_room(room_code: str, payload: NameRequest) -> dict[str, Any]:
             "SELECT COUNT(*) AS total FROM collab_room_members WHERE room_code = ? AND last_seen >= ?",
             (code, active_since),
         ).fetchone()["total"]
-        already_joined = db.execute(
-            "SELECT 1 FROM collab_room_members WHERE room_code = ? AND member_name = ?",
-            (code, name),
+        existing = db.execute(
+            "SELECT member_name FROM collab_room_members WHERE room_code = ? AND passport_id = ?",
+            (code, passport_id),
         ).fetchone()
-        if not already_joined and int(active_count) >= MAX_MEMBERS:
+        if not existing and int(active_count) >= MAX_MEMBERS:
             raise HTTPException(status_code=409, detail=f"This room has reached its {MAX_MEMBERS}-member limit.")
-        db.execute(
-            """INSERT INTO collab_room_members (room_code, member_name, joined_at, last_seen)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(room_code, member_name) DO UPDATE SET last_seen = excluded.last_seen""",
-            (code, name, timestamp(), timestamp()),
-        )
-        return {"joined": True, "room_code": code, "member_name": name, "expires_at": require_room(db, code)["expires_at"]}
+
+        # The legacy table has a room/name primary key. Disambiguate identical
+        # display names without allowing one account to impersonate another.
+        member_name = str(existing["member_name"]) if existing else name
+        if not existing:
+            name_conflict = db.execute(
+                "SELECT 1 FROM collab_room_members WHERE room_code = ? AND member_name = ?",
+                (code, member_name),
+            ).fetchone()
+            if name_conflict:
+                member_name = f"{name[:30]} ({passport_id[-6:]})"
+            db.execute(
+                "INSERT INTO collab_room_members "
+                "(room_code, member_name, passport_id, joined_at, last_seen) VALUES (?, ?, ?, ?, ?)",
+                (code, member_name, passport_id, timestamp(), timestamp()),
+            )
+        else:
+            # Preserve any suffix added to distinguish two accounts with the
+            # same display name in this legacy name-keyed table.
+            member_name = str(existing["member_name"])
+            db.execute(
+                "UPDATE collab_room_members SET last_seen = ? "
+                "WHERE room_code = ? AND passport_id = ?",
+                (timestamp(), code, passport_id),
+            )
+        return {"joined": True, "room_code": code, "member_name": member_name, "expires_at": require_room(db, code)["expires_at"]}
 
 
 @router.get("/rooms/{room_code}/workspace")
-def get_workspace(room_code: str, member_name: str) -> dict[str, Any]:
+def get_workspace(room_code: str, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     with connection() as db:
         room = require_room(db, code)
-        member = require_member(db, code, member_name)
+        member = require_member(db, code, request)
         active_since = (utc_now() - timedelta(seconds=ACTIVE_SECONDS)).isoformat(timespec="seconds")
         members = [dict(row) for row in db.execute(
             "SELECT member_name, joined_at FROM collab_room_members WHERE room_code = ? AND last_seen >= ? ORDER BY joined_at",
@@ -396,11 +449,11 @@ def get_workspace(room_code: str, member_name: str) -> dict[str, Any]:
 
 
 @router.post("/rooms/{room_code}/notes")
-def add_note(room_code: str, payload: NoteRequest) -> dict[str, Any]:
+def add_note(room_code: str, payload: NoteRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     with connection() as db:
         require_room(db, code)
-        author = require_member(db, code, payload.member_name)
+        author = require_member(db, code, request)
         cursor = db.execute(
             "INSERT INTO collab_notes (room_code, author, title, content, created_at) VALUES (?, ?, ?, ?, ?)",
             (code, author, payload.title.strip(), payload.content.strip(), timestamp()),
@@ -410,14 +463,14 @@ def add_note(room_code: str, payload: NoteRequest) -> dict[str, Any]:
 
 
 @router.post("/rooms/{room_code}/resources")
-def add_resource(room_code: str, payload: ResourceRequest) -> dict[str, Any]:
+def add_resource(room_code: str, payload: ResourceRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     parsed = urlparse(payload.url.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(status_code=400, detail="Use a valid http or https resource link.")
     with connection() as db:
         require_room(db, code)
-        author = require_member(db, code, payload.member_name)
+        author = require_member(db, code, request)
         cursor = db.execute(
             "INSERT INTO collab_resources (room_code, author, title, url, description, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (code, author, payload.title.strip(), payload.url.strip(), payload.description.strip(), timestamp()),
@@ -427,11 +480,11 @@ def add_resource(room_code: str, payload: ResourceRequest) -> dict[str, Any]:
 
 
 @router.post("/rooms/{room_code}/messages")
-def add_message(room_code: str, payload: MessageRequest) -> dict[str, Any]:
+def add_message(room_code: str, payload: MessageRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     with connection() as db:
         require_room(db, code)
-        author = require_member(db, code, payload.member_name)
+        author = require_member(db, code, request)
         cursor = db.execute(
             "INSERT INTO collab_messages (room_code, author, message, created_at) VALUES (?, ?, ?, ?)",
             (code, author, payload.message.strip(), timestamp()),
@@ -445,7 +498,7 @@ def add_message(room_code: str, payload: MessageRequest) -> dict[str, Any]:
 
 
 @router.post("/rooms/{room_code}/quiz/start")
-def start_room_quiz(room_code: str, payload: QuizStartRequest) -> dict[str, Any]:
+def start_room_quiz(room_code: str, payload: QuizStartRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     questions = [item.model_dump() for item in payload.questions]
     for item in questions:
@@ -454,7 +507,7 @@ def start_room_quiz(room_code: str, payload: QuizStartRequest) -> dict[str, Any]
         item["options"] = [str(option).strip()[:180] for option in item["options"]]
     with connection() as db:
         require_room(db, code)
-        creator = require_member(db, code, payload.member_name)
+        creator = require_member(db, code, request)
         active_quiz = db.execute(
             "SELECT is_active FROM collab_quizzes WHERE room_code = ?", (code,)
         ).fetchone()
@@ -473,11 +526,11 @@ def start_room_quiz(room_code: str, payload: QuizStartRequest) -> dict[str, Any]
 
 
 @router.post("/rooms/{room_code}/quiz/answer")
-def answer_room_quiz(room_code: str, payload: QuizAnswerRequest) -> dict[str, Any]:
+def answer_room_quiz(room_code: str, payload: QuizAnswerRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     with connection() as db:
         require_room(db, code)
-        member = require_member(db, code, payload.member_name)
+        member = require_member(db, code, request)
         quiz = db.execute("SELECT * FROM collab_quizzes WHERE room_code = ? AND is_active = 1", (code,)).fetchone()
         if quiz is None:
             raise HTTPException(status_code=404, detail="There is no active group quiz.")
@@ -500,11 +553,11 @@ def answer_room_quiz(room_code: str, payload: QuizAnswerRequest) -> dict[str, An
 
 
 @router.post("/rooms/{room_code}/quiz/reveal")
-def reveal_room_quiz(room_code: str, payload: NameRequest) -> dict[str, Any]:
+def reveal_room_quiz(room_code: str, payload: NameRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     with connection() as db:
         require_room(db, code)
-        member = require_member(db, code, payload.member_name)
+        member = require_member(db, code, request)
         quiz = db.execute("SELECT created_by FROM collab_quizzes WHERE room_code = ? AND is_active = 1", (code,)).fetchone()
         if quiz is None:
             raise HTTPException(status_code=404, detail="There is no active group quiz.")
@@ -515,11 +568,11 @@ def reveal_room_quiz(room_code: str, payload: NameRequest) -> dict[str, Any]:
 
 
 @router.post("/rooms/{room_code}/quiz/next")
-def next_room_question(room_code: str, payload: NameRequest) -> dict[str, Any]:
+def next_room_question(room_code: str, payload: NameRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     with connection() as db:
         require_room(db, code)
-        member = require_member(db, code, payload.member_name)
+        member = require_member(db, code, request)
         quiz = db.execute("SELECT * FROM collab_quizzes WHERE room_code = ? AND is_active = 1", (code,)).fetchone()
         if quiz is None:
             raise HTTPException(status_code=404, detail="There is no active group quiz.")
@@ -537,12 +590,12 @@ def next_room_question(room_code: str, payload: NameRequest) -> dict[str, Any]:
 
 
 @router.post("/rooms/{room_code}/whiteboard/strokes")
-def add_whiteboard_stroke(room_code: str, payload: StrokeRequest) -> dict[str, Any]:
+def add_whiteboard_stroke(room_code: str, payload: StrokeRequest, request: Request) -> dict[str, Any]:
     code = room_code.strip().upper()
     points = [point.model_dump() for point in payload.points]
     with connection() as db:
         require_room(db, code)
-        author = require_member(db, code, payload.member_name)
+        author = require_member(db, code, request)
         cursor = db.execute(
             "INSERT INTO collab_whiteboard_strokes (room_code, author, colour, points_json, created_at) VALUES (?, ?, ?, ?, ?)",
             (code, author, payload.colour, json.dumps(points), timestamp()),
@@ -555,10 +608,10 @@ def add_whiteboard_stroke(room_code: str, payload: StrokeRequest) -> dict[str, A
 
 
 @router.post("/rooms/{room_code}/whiteboard/clear")
-def clear_whiteboard(room_code: str, payload: NameRequest) -> dict[str, bool]:
+def clear_whiteboard(room_code: str, payload: NameRequest, request: Request) -> dict[str, bool]:
     code = room_code.strip().upper()
     with connection() as db:
         require_room(db, code)
-        require_member(db, code, payload.member_name)
+        require_member(db, code, request)
         db.execute("DELETE FROM collab_whiteboard_strokes WHERE room_code = ?", (code,))
     return {"cleared": True}

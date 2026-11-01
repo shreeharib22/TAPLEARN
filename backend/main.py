@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -944,6 +944,7 @@ def initialise_room_tables():
                 title TEXT NOT NULL,
                 lesson_id TEXT NOT NULL,
                 host_name TEXT NOT NULL,
+                host_passport_id TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 expires_at TEXT NOT NULL,
                 max_members INTEGER NOT NULL DEFAULT 30,
@@ -957,6 +958,7 @@ def initialise_room_tables():
                 room_code TEXT NOT NULL,
                 member_token TEXT NOT NULL UNIQUE,
                 display_name TEXT NOT NULL,
+                passport_id TEXT,
                 role TEXT NOT NULL DEFAULT 'member',
                 joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -965,6 +967,23 @@ def initialise_room_tables():
             )
         """)
 
+        room_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(study_rooms)").fetchall()
+        }
+        if "host_passport_id" not in room_columns:
+            db.execute("ALTER TABLE study_rooms ADD COLUMN host_passport_id TEXT")
+
+        member_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(study_room_members)").fetchall()
+        }
+        if "passport_id" not in member_columns:
+            db.execute("ALTER TABLE study_room_members ADD COLUMN passport_id TEXT")
+
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_room_member_account
+            ON study_room_members(room_code, passport_id)
+            WHERE passport_id IS NOT NULL
+        """)
         db.execute("""
             CREATE INDEX IF NOT EXISTS idx_room_members_code_seen
             ON study_room_members(room_code, last_seen)
@@ -1045,14 +1064,14 @@ def make_room_code(db):
 
 
 @app.post("/api/rooms")
-def create_study_room(payload: RoomCreateRequest):
+def create_study_room(payload: RoomCreateRequest, request: Request):
     if payload.lesson_id not in VALID_LESSON_IDS:
         raise HTTPException(
             status_code=400,
             detail="Choose a valid TAPLEARN lesson.",
         )
 
-    host_name = payload.host_name.strip()
+    host_passport_id, host_name = authenticated_passport(request)
     title = payload.title.strip() or "TAPLEARN Study Room"
 
     with database() as db:
@@ -1062,24 +1081,26 @@ def create_study_room(payload: RoomCreateRequest):
         db.execute("""
             INSERT INTO study_rooms
                 (room_code, title, lesson_id, host_name,
-                 expires_at, max_members)
-            VALUES (?, ?, ?, ?, datetime('now', '+2 hours'), ?)
+                 host_passport_id, expires_at, max_members)
+            VALUES (?, ?, ?, ?, ?, datetime('now', '+2 hours'), ?)
         """, (
             room_code,
             title,
             payload.lesson_id,
             host_name,
+            host_passport_id,
             ROOM_CAPACITY,
         ))
 
         db.execute("""
             INSERT INTO study_room_members
-                (room_code, member_token, display_name, role)
-            VALUES (?, ?, ?, 'host')
+                (room_code, member_token, display_name, passport_id, role)
+            VALUES (?, ?, ?, ?, 'host')
         """, (
             room_code,
             member_token,
             host_name,
+            host_passport_id,
         ))
 
         snapshot = room_snapshot(db, room_code)
@@ -1095,9 +1116,10 @@ def create_study_room(payload: RoomCreateRequest):
 def join_study_room(
     room_code: str,
     payload: RoomJoinRequest,
+    request: Request,
 ):
     code = room_code.strip().upper()
-    display_name = payload.display_name.strip()
+    passport_id, display_name = authenticated_passport(request)
 
     with database() as db:
         room = db.execute("""
@@ -1114,6 +1136,11 @@ def join_study_room(
                 detail="This room does not exist or has expired.",
             )
 
+        existing_member = db.execute(
+            "SELECT id, role FROM study_room_members WHERE room_code = ? AND passport_id = ?",
+            (code, passport_id),
+        ).fetchone()
+
         active_count = db.execute("""
             SELECT COUNT(*) AS total
             FROM study_room_members
@@ -1121,7 +1148,7 @@ def join_study_room(
               AND last_seen >= datetime('now', '-90 seconds')
         """, (code,)).fetchone()["total"]
 
-        if int(active_count) >= int(room["max_members"]):
+        if existing_member is None and int(active_count) >= int(room["max_members"]):
             raise HTTPException(
                 status_code=409,
                 detail="This room is full.",
@@ -1129,15 +1156,28 @@ def join_study_room(
 
         member_token = secrets.token_urlsafe(32)
 
-        db.execute("""
-            INSERT INTO study_room_members
-                (room_code, member_token, display_name, role)
-            VALUES (?, ?, ?, 'member')
-        """, (
-            code,
-            member_token,
-            display_name,
-        ))
+        if existing_member is None:
+            db.execute("""
+                INSERT INTO study_room_members
+                    (room_code, member_token, display_name, passport_id, role)
+                VALUES (?, ?, ?, ?, 'member')
+            """, (
+                code,
+                member_token,
+                display_name,
+                passport_id,
+            ))
+        else:
+            db.execute("""
+                UPDATE study_room_members
+                SET member_token = ?, display_name = ?, last_seen = CURRENT_TIMESTAMP
+                WHERE room_code = ? AND passport_id = ?
+            """, (
+                member_token,
+                display_name,
+                code,
+                passport_id,
+            ))
 
         snapshot = room_snapshot(db, code)
 
@@ -1150,6 +1190,8 @@ def join_study_room(
 
 @app.get("/api/rooms/{room_code}")
 def get_study_room(room_code: str):
+    # This read-only summary is available to signed-in invitees before they
+    # join. All workspace reads and writes still require account membership.
     code = room_code.strip().upper()
 
     with database() as db:
@@ -1171,18 +1213,37 @@ def get_study_room(room_code: str):
 def heartbeat_study_room(
     room_code: str,
     payload: RoomMemberRequest,
+    request: Request,
 ):
     code = room_code.strip().upper()
+    passport_id, display_name = authenticated_passport(request)
 
     with database() as db:
         updated = db.execute("""
             UPDATE study_room_members
             SET last_seen = CURRENT_TIMESTAMP
-            WHERE room_code = ? AND member_token = ?
+            WHERE room_code = ? AND member_token = ? AND passport_id = ?
         """, (
             code,
             payload.member_token,
+            passport_id,
         ))
+
+        # Adopt a pre-migration membership only when the caller proves
+        # possession of its random token and the signed-in profile name
+        # matches the name recorded when that room session was created.
+        if updated.rowcount == 0:
+            updated = db.execute("""
+                UPDATE study_room_members
+                SET passport_id = ?, last_seen = CURRENT_TIMESTAMP
+                WHERE room_code = ? AND member_token = ?
+                  AND passport_id IS NULL AND display_name = ?
+            """, (
+                passport_id,
+                code,
+                payload.member_token,
+                display_name,
+            ))
 
         if updated.rowcount == 0:
             raise HTTPException(
@@ -1205,17 +1266,25 @@ def heartbeat_study_room(
 def leave_study_room(
     room_code: str,
     payload: RoomMemberRequest,
+    request: Request,
 ):
     code = room_code.strip().upper()
+    passport_id, display_name = authenticated_passport(request)
 
     with database() as db:
         db.execute("""
             UPDATE study_room_members
             SET last_seen = '1970-01-01 00:00:00'
             WHERE room_code = ? AND member_token = ?
+              AND (
+                passport_id = ?
+                OR (passport_id IS NULL AND display_name = ?)
+              )
         """, (
             code,
             payload.member_token,
+            passport_id,
+            display_name,
         ))
 
     return {"left": True}
@@ -1228,6 +1297,20 @@ app.include_router(community_router)
 from fastapi.responses import JSONResponse
 from auth import router as auth_router, current_user as taplearn_current_user
 app.include_router(auth_router)
+
+
+def authenticated_passport(request: Request) -> tuple[str, str]:
+    """Return the verified account passport ID and its canonical display name."""
+    passport_id, _ = taplearn_current_user(request.headers.get("authorization"))
+    with database() as db:
+        row = db.execute(
+            "SELECT display_name FROM passports WHERE passport_id = ?",
+            (passport_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=401, detail="The signed-in learner profile was not found.")
+    return passport_id, str(row["display_name"])
+
 
 @app.middleware("http")
 async def require_account_for_rooms(request, call_next):

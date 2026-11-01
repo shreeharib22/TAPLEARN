@@ -23,6 +23,7 @@ import {
   getPendingSyncCount,
   syncPendingChanges,
   createStudyRoom,
+  getStudyRoom,
   joinStudyRoom,
   heartbeatStudyRoom,
   leaveStudyRoom,
@@ -3050,9 +3051,7 @@ function RoomsView({
     [],
   )
 
-  const [displayName, setDisplayName] = useState(
-    learnerName || 'Learner',
-  )
+  const displayName = learnerName || 'Learner'
 
   const [roomTitle, setRoomTitle] = useState(
     'TAPLEARN Study Room',
@@ -3105,15 +3104,7 @@ function RoomsView({
 
     const loadRoom = async () => {
       try {
-        const response = await fetch(
-          `${import.meta.env.VITE_API_BASE_URL || ''}/api/rooms/${encodeURIComponent(initialCode)}`,
-        )
-
-        if (!response.ok) {
-          throw new Error('This room is no longer active.')
-        }
-
-        await response.json()
+        await getStudyRoom(initialCode)
 
         if (active) {
           setJoinCode(initialCode)
@@ -3334,15 +3325,14 @@ function RoomsView({
 
       <div className="rooms-name-field">
         <label htmlFor="room-display-name">
-          Your display name
+          Signed-in account
         </label>
 
         <input
           id="room-display-name"
           value={displayName}
-          maxLength={60}
-          onChange={event => setDisplayName(event.target.value)}
-          placeholder="Enter your name"
+          readOnly
+          aria-readonly="true"
         />
       </div>
 
