@@ -11,7 +11,7 @@
 - **Concept Rescue:** a short, topic-specific explanation after the assessment.
 - **Tap-In NFC session:** opening `/tap/{passport_id}` records a tap event on the backend, restores the learner passport, and displays the next learning checkpoint before the learner continues.
 - **Learning passport:** learner progress is retrieved from the backend and can be resumed from another shared device using the card URL.
-- **SQLite persistence:** lesson scores, diagnostic attempts and NFC tap events persist across local restarts.
+- **Persistent data:** SQLite is used for local development. Set the private backend `DATABASE_URL` to a managed PostgreSQL connection string for durable hosted accounts, progress, community relationships and study-room data.
 - **Groq-powered tutor:** the assessment result can request a misconception-focused explanation in the selected language through Groq's hosted chat-completions API. The API key stays on the backend.
 - **Account-based community:** discover learner profiles, follow and unfollow accounts, and view accurate follower/following lists.
 - **Shared learning library:** authenticated learners can upload and browse PDF/image learning resources.
@@ -104,9 +104,9 @@ Open the exact URL printed by Vite, normally <http://localhost:5173/tap/demo-pas
 - Community profile edits, follow/unfollow actions, follower lists, following lists and resource uploads require a valid TAPLEARN login session.
 - Profile and relationship data are stored in the backend SQLite database.
 - Resource uploads accept PDF, PNG, JPG and WEBP files up to 15 MB. The backend validates the content signature rather than relying only on the file extension.
-- For local development, the example uses `taplearn.db` and `uploads/` relative to the backend working directory. For a single-instance production backend, mount a **persistent writable volume** and set `TAPLEARN_DB_PATH=/var/data/taplearn.db` and `TAPLEARN_UPLOAD_DIR=/var/data/uploads` (or the equivalent mounted paths on your host). Do not use the default ephemeral application filesystem in production.
+- For local development, the example uses `taplearn.db` and `uploads/` relative to the backend working directory. For hosted accounts and progress, set `DATABASE_URL` to a managed PostgreSQL connection string. Render Free web services have an ephemeral filesystem, so local SQLite data is not durable there.
 - For multi-instance deployments or managed object storage, configure an S3-compatible bucket (for example Cloudflare R2) with `S3_ENDPOINT_URL`, `S3_REGION`, `S3_BUCKET_NAME`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`. Keep the bucket private; files are streamed through the authenticated TAPLEARN backend route. Never place object-storage secrets in frontend variables.
-- The database must also live on persistent storage. S3-backed PDFs alone do not make accounts, sessions, follows or room records persistent.
+- PostgreSQL persists accounts, sessions, follows, learning progress and room records independently of the Render Free service filesystem. Local PDF uploads still need S3-compatible object storage for persistence.
 - Study-room codes expire after two hours. Each member must sign in and join with their account; workspace actions are verified against the signed-in account's membership.
 
 ## NFC Tap-In setup
@@ -149,8 +149,8 @@ To change the model, update `GROQ_MODEL` in `backend/.env` to an active model ID
 
 - This is a hackathon demo, not a production student identity or records system.
 - Community files use local persistent-volume storage unless S3-compatible storage is configured. A deployment without a persistent volume or object-storage configuration will lose uploaded files on redeploy/restart.
-- The authentication database uses SQLite and should be deployed on a persistent volume for this single-instance setup. Use a managed database before horizontally scaling the backend.
+- SQLite is intended for local development. Hosted deployments should set `DATABASE_URL` to managed PostgreSQL. The backend keeps SQLite as a local fallback when `DATABASE_URL` is absent.
 - The seeded demo passport is not secure authentication. The NFC URL is a bearer-style identifier and can be copied.
 - NFC uses a standard NDEF URL and does not require Web NFC access in the browser.
 - MindScan uses authored diagnostic question sets; Groq personalises the post-assessment explanation but does not generate or validate the quiz questions.
-- The frontend and backend must both be deployed. The backend needs a persistent database volume and the Groq key must be configured as a private backend environment variable in hosting.
+- The frontend and backend must both be deployed. The backend needs `DATABASE_URL` configured as a private environment variable, and the Groq key must remain a private backend environment variable.
