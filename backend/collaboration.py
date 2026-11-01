@@ -12,6 +12,8 @@ from typing import Any, Iterator
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from db import connect_database
+
 from fastapi import APIRouter, HTTPException, Request
 from auth import current_user as taplearn_current_user
 from pydantic import BaseModel, Field
@@ -37,9 +39,7 @@ def timestamp() -> str:
 @contextmanager
 def connection() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=15)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA busy_timeout = 15000")
+undefined
     try:
         yield db
         db.commit()
