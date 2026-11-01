@@ -105,10 +105,10 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             )}
 
             <label className="tl-auth-field">
-              <span>Email address</span>
+              <span>{mode === 'login' ? 'Email address or username' : 'Email address'}</span>
               <div className="tl-auth-input-wrap">
                 <Mail size={17} />
-                <input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" maxLength={254} required />
+                <input type={mode === 'login' ? 'text' : 'email'} autoComplete={mode === 'login' ? 'username' : 'email'} value={email} onChange={event => setEmail(event.target.value)} placeholder={mode === 'login' ? 'you@example.com or your name' : 'you@example.com'} maxLength={254} required />
               </div>
             </label>
 
